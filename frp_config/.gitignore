@@ -1,0 +1,14 @@
+# 日志文件
+*.log
+frps.log
+frpc.log
+
+# 配置文件（可能包含敏感信息）
+# 注意：如果需要提交配置模板，请使用 .example 后缀
+frps.ini
+frpc.ini
+
+# 临时文件
+*.tmp
+*.bak
+

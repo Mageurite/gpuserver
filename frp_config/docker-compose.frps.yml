@@ -1,0 +1,44 @@
+# frp Server (Web Server 部署)
+# 用于接收 GPU Server 的反向隧道连接
+
+version: '3.8'
+
+services:
+  frps:
+    # 使用官方 frp 镜像
+    image: snowdreamtech/frps:latest
+    container_name: frps
+    restart: unless-stopped
+
+    # 网络配置
+    network_mode: "host"
+
+    # 挂载配置文件
+    volumes:
+      - ./frps.ini:/etc/frp/frps.ini:ro
+      - ./frps_logs:/var/log/frp
+
+    # 使用配置文件启动
+    command: ["-c", "/etc/frp/frps.ini"]
+
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# 说明：
+# 1. 使用 host 网络模式以便监听和暴露端口
+# 2. 端口说明：
+#    - 7000: frp 服务端口（GPU Server 连接）
+#    - 7500: Dashboard 端口（可选）
+#    - 9000: GPU Management API（转发）
+#    - 9001: GPU WebSocket（转发）
+# 3. 防火墙配置：
+#    需要开放以下端口：
+#    - 7000 (frp 服务)
+#    - 9000 (GPU API)
+#    - 9001 (GPU WebSocket)
+#    可选：7500 (Dashboard)
