@@ -1,0 +1,8 @@
+root_backup/
+conda_envs/
+*/models/
+# 临时文件目录
+temp/
+try/
+MuseTalk/
+virtual_tutor/

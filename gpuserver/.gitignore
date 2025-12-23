@@ -37,8 +37,8 @@ Thumbs.db
 # Docker
 docker-compose.override.yml
 
-# 测试文件
-test_*.py
+# 测试文件（保留测试脚本，但忽略测试输出）
+# test_*.py  # 保留测试脚本
 *.test.py
 
 # 模型文件（如果很大）

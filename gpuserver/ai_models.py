@@ -4,17 +4,25 @@ import logging
 from typing import Optional, Dict
 from threading import Lock
 
+# Initialize logger first
 logger = logging.getLogger(__name__)
+
+# Import LLM engine from llm module
+from llm import get_llm_engine
+
+from config import get_settings
+
+settings = get_settings()
 
 
 class AIEngine:
     """
     AI 推理引擎
-
-    这是一个 Mock 实现，用于演示接口。
-    在生产环境中，应该替换为真实的 AI 模型调用（LLM/ASR/TTS/MuseTalk）
     
-    注意：每个 AIEngine 实例对应一个 tutor_id，实现模型隔离
+    支持真实的 LLM 调用（通过 Ollama）或 Mock 模式。
+    每个 AIEngine 实例对应一个 tutor_id，实现模型隔离。
+    
+    注意：每个 tutor_id 可以使用不同的 LLM 模型（通过环境变量配置）
     """
 
     def __init__(self, tutor_id: int):
@@ -25,7 +33,11 @@ class AIEngine:
             tutor_id: 导师 ID，用于标识不同的模型实例
         """
         self.tutor_id = tutor_id
-        logger.info(f"AI Engine initialized for tutor_id={tutor_id} (Mock mode)")
+        
+        # 初始化 LLM 引擎（从 llm 模块获取）
+        self.llm_engine = get_llm_engine(tutor_id)
+        
+        logger.info(f"AI Engine initialized for tutor_id={tutor_id}")
 
     async def process_text(
         self,
@@ -39,7 +51,7 @@ class AIEngine:
         Args:
             text: 用户输入的文本
             tutor_id: 导师 ID（用于验证，应该与实例的 tutor_id 一致）
-            kb_id: 知识库 ID（可选，用于 RAG）
+            kb_id: 知识库 ID（可选，用于 RAG，当前版本暂未实现 RAG 检索）
 
         Returns:
             str: AI 生成的响应文本
@@ -50,25 +62,15 @@ class AIEngine:
         
         logger.info(f"Processing text: tutor_id={tutor_id}, kb_id={kb_id}, text={text[:50]}...")
 
-        # 模拟处理延迟
-        await asyncio.sleep(0.5)
-
-        # Mock LLM 响应（包含 tutor_id 标识，表示使用独立的模型实例）
+        # TODO: 如果 kb_id 存在，应该先进行 RAG 检索，然后将检索结果作为上下文
+        # 当前版本先不实现 RAG，只传递用户输入
+        context = None
         if kb_id:
-            response = (
-                f"[Mock Response - Tutor {tutor_id} Model Instance] "
-                f"使用知识库 {kb_id} 的回答："
-                f"您好！我是虚拟导师 #{tutor_id}。"
-                f"关于您的问题「{text}」，根据知识库的内容，我的回答是：这是一个基于知识库检索的模拟回答。"
-            )
-        else:
-            response = (
-                f"[Mock Response - Tutor {tutor_id} Model Instance] "
-                f"您好！我是虚拟导师 #{tutor_id}。"
-                f"您刚才说：「{text}」。这是一个模拟的 AI 回复。"
-                f"在真实环境中，这里会调用 LLM 模型生成智能回复。"
-            )
-
+            logger.info(f"RAG retrieval for kb_id={kb_id} not yet implemented, using direct LLM")
+        
+        # 调用 LLM 引擎生成响应
+        response = await self.llm_engine.generate(text=text, context=context)
+        
         logger.info(f"Generated response: {response[:100]}...")
         return response
 
