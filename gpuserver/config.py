@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -28,6 +29,42 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.4
     # 是否启用 LLM（如果为 False，则使用 Mock 模式）
     enable_llm: bool = True
+
+    # ASR 配置
+    # Whisper 模型: tiny, base, small, medium, large
+    asr_model: str = "base"
+    # 是否启用 ASR（如果为 False，则使用 Mock 模式）
+    enable_asr: bool = True
+    # ASR 设备: cuda 或 cpu
+    asr_device: str = "cuda"
+    # ASR 默认语言: zh (中文), en (英文)
+    asr_language: str = "zh"
+
+    # TTS 配置
+    # Edge TTS 声音: zh-CN-XiaoxiaoNeural (中文女声), zh-CN-YunxiNeural (中文男声)
+    tts_voice: str = "zh-CN-XiaoxiaoNeural"
+    # 是否启用 TTS（如果为 False，则使用 Mock 模式）
+    enable_tts: bool = True
+
+    # RAG 配置
+    # 是否启用 RAG（如果为 False，则使用 Mock 模式）
+    enable_rag: bool = False
+    # RAG 服务 URL（如果使用独立的 RAG 服务）
+    rag_url: Optional[str] = None
+    # RAG 检索返回的文档数量
+    rag_top_k: int = 5
+
+    # MuseTalk / Avatar 配置
+    # 是否启用 MuseTalk（如果为 False，则使用 Mock 模式）
+    enable_avatar: bool = False  # 也兼容 enable_musetalk
+    # Avatar 存储目录
+    avatars_dir: str = "/workspace/gpuserver/data/avatars"
+    # MuseTalk 基础目录
+    musetalk_base: str = "/workspace/MuseTalk"
+    # MuseTalk Conda 环境路径
+    musetalk_conda_env: Optional[str] = None
+    # FFmpeg 路径
+    ffmpeg_path: str = "ffmpeg"
 
     class Config:
         env_file = ".env"

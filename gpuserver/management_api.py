@@ -1,10 +1,14 @@
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, File, UploadFile, Form
 from pydantic import BaseModel
 from typing import Optional
 import uvicorn
+import os
+import shutil
+import tempfile
 
 from config import settings
 from session_manager import get_session_manager
+from musetalk import get_avatar_manager
 
 
 # Pydantic 模型
@@ -187,6 +191,212 @@ async def list_sessions():
     }
 
 
+# ====================================
+# Avatar Management API
+# ====================================
+
+class CreateAvatarRequest(BaseModel):
+    """创建 Avatar 请求（从视频路径）"""
+    avatar_id: str
+    video_path: str
+    apply_blur: bool = False
+    tutor_id: Optional[int] = None
+
+
+class AvatarResponse(BaseModel):
+    """Avatar 响应"""
+    status: str
+    avatar_id: str
+    avatar_path: Optional[str] = None
+    message: str
+    mock: Optional[bool] = None
+
+
+@app.post("/v1/avatars", response_model=AvatarResponse, status_code=status.HTTP_201_CREATED)
+async def create_avatar_from_path(request: CreateAvatarRequest):
+    """
+    从视频路径创建 Avatar（教师端使用）
+
+    Args:
+        request: 创建 Avatar 请求
+
+    Returns:
+        AvatarResponse: Avatar 创建结果
+    """
+    try:
+        avatar_manager = get_avatar_manager(
+            enable_real=settings.enable_avatar,
+            avatars_dir=settings.avatars_dir,
+            musetalk_base=settings.musetalk_base,
+            conda_env=settings.musetalk_conda_env,
+            ffmpeg_path=settings.ffmpeg_path
+        )
+
+        # 验证视频文件存在
+        if not os.path.exists(request.video_path):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Video file not found: {request.video_path}"
+            )
+
+        # 创建 Avatar
+        result = await avatar_manager.create_avatar(
+            avatar_id=request.avatar_id,
+            video_path=request.video_path,
+            apply_blur=request.apply_blur,
+            tutor_id=request.tutor_id
+        )
+
+        return AvatarResponse(**result)
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create avatar: {str(e)}"
+        )
+
+
+@app.post("/v1/avatars/upload", response_model=AvatarResponse, status_code=status.HTTP_201_CREATED)
+async def create_avatar_from_upload(
+    avatar_id: str = Form(...),
+    apply_blur: bool = Form(False),
+    tutor_id: Optional[int] = Form(None),
+    video_file: UploadFile = File(...)
+):
+    """
+    从上传的视频文件创建 Avatar（教师端使用）
+
+    Args:
+        avatar_id: Avatar 唯一标识符
+        apply_blur: 是否应用背景模糊
+        tutor_id: 关联的 Tutor ID
+        video_file: 上传的视频文件
+
+    Returns:
+        AvatarResponse: Avatar 创建结果
+    """
+    temp_video_path = None
+
+    try:
+        avatar_manager = get_avatar_manager(
+            enable_real=settings.enable_avatar,
+            avatars_dir=settings.avatars_dir,
+            musetalk_base=settings.musetalk_base,
+            conda_env=settings.musetalk_conda_env,
+            ffmpeg_path=settings.ffmpeg_path
+        )
+
+        # 创建临时目录保存上传的视频
+        temp_dir = tempfile.mkdtemp(prefix="avatar_upload_")
+        temp_video_path = os.path.join(temp_dir, video_file.filename)
+
+        # 保存上传的文件
+        with open(temp_video_path, "wb") as f:
+            shutil.copyfileobj(video_file.file, f)
+
+        # 创建 Avatar
+        result = await avatar_manager.create_avatar(
+            avatar_id=avatar_id,
+            video_path=temp_video_path,
+            apply_blur=apply_blur,
+            tutor_id=tutor_id
+        )
+
+        return AvatarResponse(**result)
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create avatar: {str(e)}"
+        )
+    finally:
+        # 清理临时文件
+        if temp_video_path and os.path.exists(temp_video_path):
+            try:
+                os.remove(temp_video_path)
+                os.rmdir(os.path.dirname(temp_video_path))
+            except:
+                pass
+
+
+@app.get("/v1/avatars/{avatar_id}")
+async def get_avatar(avatar_id: str):
+    """
+    获取 Avatar 信息
+
+    Args:
+        avatar_id: Avatar ID
+
+    Returns:
+        dict: Avatar 信息
+
+    Raises:
+        HTTPException: 如果 Avatar 不存在
+    """
+    avatar_manager = get_avatar_manager(
+        enable_real=settings.enable_avatar,
+        avatars_dir=settings.avatars_dir
+    )
+
+    avatar_info = await avatar_manager.get_avatar(avatar_id)
+
+    if not avatar_info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Avatar {avatar_id} not found"
+        )
+
+    return avatar_info
+
+
+@app.delete("/v1/avatars/{avatar_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_avatar(avatar_id: str):
+    """
+    删除 Avatar
+
+    Args:
+        avatar_id: Avatar ID
+
+    Raises:
+        HTTPException: 如果 Avatar 不存在
+    """
+    avatar_manager = get_avatar_manager(
+        enable_real=settings.enable_avatar,
+        avatars_dir=settings.avatars_dir
+    )
+
+    success = await avatar_manager.delete_avatar(avatar_id)
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Avatar {avatar_id} not found"
+        )
+
+    return None
+
+
+@app.get("/v1/avatars")
+async def list_avatars():
+    """
+    列出所有 Avatar
+
+    Returns:
+        dict: Avatar 列表
+    """
+    avatar_manager = get_avatar_manager(
+        enable_real=settings.enable_avatar,
+        avatars_dir=settings.avatars_dir
+    )
+
+    avatars = await avatar_manager.list_avatars()
+
+    return {
+        "total": len(avatars),
+        "avatars": avatars
+    }
+
+
 def main():
     """启动管理 API 服务"""
     uvicorn.run(
@@ -199,3 +409,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

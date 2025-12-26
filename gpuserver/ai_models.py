@@ -9,6 +9,12 @@ logger = logging.getLogger(__name__)
 
 # Import LLM engine from llm module
 from llm import get_llm_engine
+# Import ASR engine from asr module
+from asr import get_asr_engine
+# Import TTS engine from tts module
+from tts import get_tts_engine
+# Import RAG engine from rag module
+from rag import get_rag_engine
 
 from config import get_settings
 
@@ -33,10 +39,30 @@ class AIEngine:
             tutor_id: 导师 ID，用于标识不同的模型实例
         """
         self.tutor_id = tutor_id
-        
+
         # 初始化 LLM 引擎（从 llm 模块获取）
         self.llm_engine = get_llm_engine(tutor_id)
-        
+
+        # 初始化 ASR 引擎（从 asr 模块获取）
+        self.asr_engine = get_asr_engine(
+            model_name=settings.asr_model,
+            enable_real=settings.enable_asr,
+            device=settings.asr_device
+        )
+
+        # 初始化 TTS 引擎（从 tts 模块获取）
+        self.tts_engine = get_tts_engine(
+            voice=settings.tts_voice,
+            enable_real=settings.enable_tts
+        )
+
+        # 初始化 RAG 引擎（从 rag 模块获取）
+        self.rag_engine = get_rag_engine(
+            enable_real=settings.enable_rag,
+            rag_url=settings.rag_url,
+            top_k=settings.rag_top_k
+        )
+
         logger.info(f"AI Engine initialized for tutor_id={tutor_id}")
 
     async def process_text(
@@ -62,12 +88,25 @@ class AIEngine:
         
         logger.info(f"Processing text: tutor_id={tutor_id}, kb_id={kb_id}, text={text[:50]}...")
 
-        # TODO: 如果 kb_id 存在，应该先进行 RAG 检索，然后将检索结果作为上下文
-        # 当前版本先不实现 RAG，只传递用户输入
+        # RAG 检索：如果 kb_id 存在，先进行知识库检索
         context = None
         if kb_id:
-            logger.info(f"RAG retrieval for kb_id={kb_id} not yet implemented, using direct LLM")
-        
+            logger.info(f"Performing RAG retrieval for kb_id={kb_id}")
+            try:
+                # 检索相关文档
+                retrieved_docs = await self.rag_engine.retrieve(
+                    query=text,
+                    kb_id=kb_id,
+                    user_id=tutor_id  # 使用 tutor_id 作为 user_id
+                )
+
+                # 格式化为 LLM 上下文
+                context = self.rag_engine.format_context(retrieved_docs)
+                logger.info(f"RAG retrieved {len(retrieved_docs)} documents")
+            except Exception as e:
+                logger.error(f"RAG retrieval failed: {e}, using direct LLM")
+                context = None
+
         # 调用 LLM 引擎生成响应
         response = await self.llm_engine.generate(text=text, context=context)
         
@@ -86,11 +125,11 @@ class AIEngine:
         """
         logger.info(f"Processing audio (tutor_id={self.tutor_id}): data_length={len(audio_data)}")
 
-        # 模拟 ASR 处理延迟
-        await asyncio.sleep(0.3)
-
-        # Mock ASR 转录结果
-        transcription = f"[Mock ASR - Tutor {self.tutor_id}] 这是一段模拟的语音转文本结果"
+        # 调用 ASR 引擎进行转录
+        transcription = await self.asr_engine.transcribe(
+            audio_data=audio_data,
+            language=settings.asr_language
+        )
 
         logger.info(f"Transcribed: {transcription}")
         return transcription
@@ -107,15 +146,14 @@ class AIEngine:
         """
         logger.info(f"Synthesizing speech (tutor_id={self.tutor_id}): text={text[:50]}...")
 
-        # 模拟 TTS 处理延迟
-        await asyncio.sleep(0.4)
+        # 调用 TTS 引擎进行语音合成
+        audio_data = await self.tts_engine.synthesize(
+            text=text,
+            language=settings.asr_language  # 使用与 ASR 相同的语言设置
+        )
 
-        # Mock 音频数据（实际应该是 WAV/MP3 的 base64）
-        mock_audio = b"MOCK_AUDIO_DATA_TUTOR_" + str(self.tutor_id).encode('utf-8') + b"_" + text.encode('utf-8')[:20]
-        audio_base64 = base64.b64encode(mock_audio).decode('utf-8')
-
-        logger.info(f"Synthesized audio: length={len(audio_base64)}")
-        return audio_base64
+        logger.info(f"Synthesized audio: length={len(audio_data)}")
+        return audio_data
 
 
 # 按 tutor_id 隔离的 AI 引擎实例缓存

@@ -2,6 +2,20 @@
 
 这是 Virtual Tutor System 的 GPU Server 实现，负责处理 AI 推理和实时对话。
 
+---
+
+## 📚 快速导航
+
+**新用户必读**：
+- 🚀 **[快速启动指南](README_QUICKSTART.md)** - 5分钟快速上手
+- 🔧 **[FRP 故障排查](FRP_TROUBLESHOOTING.md)** - FRP 连接问题解决方案
+
+**主要文档**：
+- 📖 本文档 - GPU Server 完整使用说明
+- 📋 [项目介绍](../项目介绍.md) - 整体架构说明
+
+---
+
 ## 📋 概述
 
 GPU Server 提供两个主要服务：
@@ -51,6 +65,53 @@ GPU Server 支持两种运行模式：
 ⚠️ **注意**：分开运行模式会导致 SessionManager 不共享，WebSocket 无法验证管理 API 创建的会话，不推荐使用。
 
 ## 🚀 快速开始
+
+### 推荐启动方式 ⭐
+
+```bash
+cd /workspace/gpuserver
+
+# 方式 1: 一键启动所有服务（推荐）
+./start_all.sh
+# 在提示时选择 Y 启动 FRP 内网穿透
+
+# 方式 2: 基础启动
+./start.sh
+# 在提示时选择是否启动 FRP
+
+# 方式 3: 只启动 FRP
+./start_frpc.sh --force
+```
+
+**启动脚本对比**：
+| 脚本 | 用途 | 特点 |
+|------|------|------|
+| `./start_all.sh` | 一键启动 | 最完整，推荐使用 |
+| `./start.sh` | 基础启动 | 支持选择是否启动 FRP |
+| `./start_frpc.sh` | 只启动 FRP | 防止重复启动，自动清理 |
+
+**查看状态**：
+```bash
+# 查看进程
+ps aux | grep -E "unified_server|frpc"
+
+# 查看日志
+tail -f logs/unified_server.log  # GPU Server
+tail -f logs/frpc.log             # FRP
+
+# 健康检查
+curl http://localhost:9000/health              # 本地
+curl http://51.161.130.234:19000/health       # 外网
+```
+
+**停止服务**：
+```bash
+./stop_all.sh     # 停止所有服务
+./stop.sh         # 停止 GPU Server（会询问是否停止 FRP）
+./stop_frpc.sh    # 只停止 FRP
+```
+
+### 详细配置步骤
 
 ### 1. 安装依赖
 
@@ -460,7 +521,26 @@ ws://localhost:9000/ws/ws/{session_id}?token={engine_token}
 
 ## 📚 更新日志
 
-### 2025-12-23 (最新)
+### 2025-12-24 (最新) 🎉
+- ✅ **修复 FRP 连接问题**
+  - 修复多进程冲突导致的连接不稳定
+  - 修复配置文件路径错误
+  - 修正日志路径配置
+- ✅ **创建新的启动脚本**
+  - `start_frpc.sh` - 改进的 FRP 启动脚本（防止重复启动）
+  - `stop_frpc.sh` - 优雅停止脚本
+- ✅ **更新主启动脚本**
+  - `start.sh` / `stop.sh` - 支持选择是否启动/停止 FRP
+  - `start_all.sh` / `stop_all.sh` - 集成 FRP 管理
+- ✅ **废弃旧脚本**
+  - `temp/scripts/start_frpc.sh` - 自动转向新脚本
+  - `temp/scripts/start_with_frp.sh` - 自动转向新脚本
+- ✅ **完善文档**
+  - 新增 [FRP_TROUBLESHOOTING.md](FRP_TROUBLESHOOTING.md) - FRP 故障排查指南
+  - 新增 [README_QUICKSTART.md](README_QUICKSTART.md) - 快速启动指南
+  - 更新主 README 添加导航和脚本说明
+
+### 2025-12-23
 - ✅ 集成真实 LLM（Ollama）
   - 使用 `langchain-ollama` 集成 Ollama LLM
   - 支持按 tutor_id 配置不同模型（通过环境变量 `TUTOR_{tutor_id}_LLM_MODEL`）

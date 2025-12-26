@@ -152,8 +152,51 @@ fi
 
 echo ""
 
+# 检查 FRP 状态
+echo -e "${BLUE}[7] FRP 状态${NC}"
+if pgrep -f "frpc" > /dev/null; then
+    FRP_PID=$(pgrep -f "frpc")
+    echo -e "${GREEN}✓ FRP 正在运行${NC}"
+    echo "  PID: $FRP_PID"
+
+    # 显示运行时长
+    FRP_UPTIME=$(ps -p $FRP_PID -o etime= | tr -d ' ')
+    echo "  运行时长: $FRP_UPTIME"
+
+    # 检查日志文件
+    if [ -f "logs/frpc.log" ]; then
+        # 检查是否连接成功
+        if tail -20 logs/frpc.log | grep -q "login to server success"; then
+            echo -e "  ${GREEN}✓ 已连接到 frps${NC}"
+        else
+            echo -e "  ${RED}✗ 未连接到 frps${NC}"
+        fi
+
+        # 检查代理状态
+        if tail -20 logs/frpc.log | grep -q "start proxy success"; then
+            echo -e "  ${GREEN}✓ 代理已启动${NC}"
+        fi
+    fi
+
+    # 测试外网连接
+    if command -v curl &> /dev/null; then
+        if curl -s --connect-timeout 3 http://51.161.130.234:19000/health > /dev/null 2>&1; then
+            echo -e "  ${GREEN}✓ 外网访问正常${NC}"
+            echo "    - API: http://51.161.130.234:19000"
+            echo "    - WebSocket: ws://51.161.130.234:19001"
+        else
+            echo -e "  ${YELLOW}! 外网访问失败${NC}"
+        fi
+    fi
+else
+    echo -e "${YELLOW}! FRP 未运行${NC}"
+    echo "  启动 FRP: ./start_frpc.sh"
+fi
+
+echo ""
+
 # 显示访问地址
-echo -e "${BLUE}[7] 访问地址${NC}"
+echo -e "${BLUE}[8] 访问地址${NC}"
 if pgrep -f "python.*unified_server.py" > /dev/null; then
     echo "  管理 API: http://localhost:$PORT/mgmt"
     echo "  管理 API (兼容): http://localhost:$PORT/v1/sessions"
@@ -167,11 +210,16 @@ fi
 echo ""
 
 # 显示快速操作
-echo -e "${BLUE}[8] 快速操作${NC}"
+echo -e "${BLUE}[9] 快速操作${NC}"
 echo "  启动服务: ./start.sh"
+echo "  启动所有: ./start_all.sh"
 echo "  停止服务: ./stop.sh"
+echo "  停止所有: ./stop_all.sh"
 echo "  重启服务: ./restart.sh"
+echo "  启动 FRP: ./start_frpc.sh"
+echo "  停止 FRP: ./stop_frpc.sh"
 echo "  查看日志: tail -f logs/server.log"
+echo "  查看 FRP 日志: tail -f logs/frpc.log"
 echo "  查看状态: ./status.sh"
 
 echo ""

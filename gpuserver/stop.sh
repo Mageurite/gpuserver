@@ -96,3 +96,23 @@ fi
 
 echo ""
 echo "=========================================="
+
+# 停止 FRP（如果在运行）
+if pgrep -f "frpc" > /dev/null; then
+    echo ""
+    echo "检测到 FRP 正在运行"
+    read -p "是否同时停止 FRP？(Y/n): " -n 1 -r
+    echo ""
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        echo "正在停止 FRP..."
+        if [ -f "stop_frpc.sh" ]; then
+            bash stop_frpc.sh
+        else
+            pkill -9 -f "frpc" || true
+            echo -e "${GREEN}✓ FRP 已停止${NC}"
+        fi
+    fi
+fi
+
+echo ""
+echo "=========================================="

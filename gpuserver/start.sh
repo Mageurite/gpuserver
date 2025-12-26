@@ -19,6 +19,18 @@ echo "  GPU Server - 启动服务"
 echo "=========================================="
 echo ""
 
+# 询问是否启动 FRP
+START_FRP=false
+if [ -f "frpc.ini" ]; then
+    echo -e "${GREEN}检测到 FRP 配置文件${NC}"
+    read -p "是否同时启动 FRP 内网穿透？(y/N): " -n 1 -r
+    echo ""
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        START_FRP=true
+    fi
+    echo ""
+fi
+
 # 检查 .env 文件
 if [ ! -f ".env" ]; then
     echo -e "${YELLOW}警告: .env 文件不存在，正在从 .env.example 复制...${NC}"
@@ -73,6 +85,17 @@ echo "  - WebSocket: ws://0.0.0.0:${MANAGEMENT_API_PORT}/ws/ws/{session_id}"
 echo "  - API 文档: http://0.0.0.0:${MANAGEMENT_API_PORT}/docs"
 echo ""
 
+# 先启动 FRP（如果选择）
+if [ "$START_FRP" = true ]; then
+    echo "正在启动 FRP..."
+    if [ -f "start_frpc.sh" ]; then
+        bash start_frpc.sh --force
+        echo ""
+    else
+        echo -e "${YELLOW}找不到 start_frpc.sh，跳过 FRP 启动${NC}"
+    fi
+fi
+
 # 启动服务
 nohup $PYTHON_CMD unified_server.py > logs/server.log 2>&1 &
 SERVER_PID=$!
@@ -98,6 +121,15 @@ if ps -p $SERVER_PID > /dev/null; then
     sleep 2
     if curl -s http://localhost:${MANAGEMENT_API_PORT}/health > /dev/null 2>&1; then
         echo -e "${GREEN}✓ 健康检查通过${NC}"
+        echo ""
+
+        # 如果启动了 FRP，显示外网地址
+        if [ "$START_FRP" = true ]; then
+            echo "🌐 通过 FRP 访问（外网）："
+            echo "   - API: http://51.161.130.234:19000"
+            echo "   - WebSocket: ws://51.161.130.234:19001/ws/ws/{session_id}"
+            echo ""
+        fi
     else
         echo -e "${YELLOW}! 健康检查失败，请查看日志${NC}"
     fi
