@@ -975,6 +975,264 @@ class AvatarManager:
             logger.error(traceback.format_exc())
             return None
 
+    async def generate_frames_stream(
+        self,
+        audio_data: str,
+        avatar_id: str,
+        fps: int = 25
+    ):
+        """
+        实时生成视频帧流（用于 WebRTC）
+
+        逐帧生成视频，每生成一帧就 yield 出去，实现实时流式传输
+
+        Args:
+            audio_data: base64 编码的音频数据
+            avatar_id: Avatar ID
+            fps: 视频帧率
+
+        Yields:
+            numpy.ndarray: 视频帧 (H, W, 3) BGR 格式
+        """
+        if not self.enable_real:
+            # Mock 模式：生成简单的测试帧
+            async for frame in self._mock_generate_frames_stream(avatar_id, fps):
+                yield frame
+            return
+
+        try:
+            # 在线程池中运行同步的帧生成过程
+            loop = asyncio.get_event_loop()
+
+            # 使用队列在线程和协程之间传递帧
+            frame_queue = asyncio.Queue(maxsize=30)
+
+            # 在线程池中运行帧生成
+            async def generate_frames():
+                await loop.run_in_executor(
+                    None,
+                    self._generate_frames_sync,
+                    audio_data,
+                    avatar_id,
+                    fps,
+                    frame_queue
+                )
+
+            # 启动生成任务
+            generate_task = asyncio.create_task(generate_frames())
+
+            # 逐帧 yield
+            while True:
+                try:
+                    frame = await asyncio.wait_for(frame_queue.get(), timeout=5.0)
+                    if frame is None:  # 结束信号
+                        break
+                    yield frame
+                except asyncio.TimeoutError:
+                    logger.warning("Frame generation timeout")
+                    break
+
+            # 等待生成任务完成
+            await generate_task
+
+        except Exception as e:
+            logger.error(f"Frame streaming failed: {e}", exc_info=True)
+
+    def _generate_frames_sync(
+        self,
+        audio_data: str,
+        avatar_id: str,
+        fps: int,
+        frame_queue: asyncio.Queue
+    ):
+        """
+        同步生成视频帧（在线程池中运行）
+
+        使用 MuseTalk 实时推理，逐帧生成并放入队列
+
+        Args:
+            audio_data: base64 编码的音频数据
+            avatar_id: Avatar ID
+            fps: 视频帧率
+            frame_queue: 帧队列（用于传递帧到主线程）
+        """
+        import base64
+        import tempfile
+        import cv2
+        import sys
+        import numpy as np
+
+        try:
+            # 1. 解码音频数据
+            audio_bytes = base64.b64decode(audio_data)
+
+            # 2. 保存音频到临时文件
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as audio_file:
+                audio_file.write(audio_bytes)
+                audio_path = audio_file.name
+
+            # 3. 准备 MuseTalk 环境
+            avatar_path = os.path.join(self.musetalk_base, "results", "v15", "avatars", avatar_id)
+
+            # 添加 MuseTalk 到 Python 路径
+            if self.musetalk_base not in sys.path:
+                sys.path.insert(0, self.musetalk_base)
+
+            # 4. 导入 MuseTalk 模块
+            try:
+                from musetalk.utils.utils import get_file_type, get_video_fps, datagen
+                from musetalk.utils.preprocessing import get_landmark_and_bbox, read_imgs, coord_placeholder
+                from musetalk.utils.blending import get_image
+                from musetalk.utils.utils import load_all_model
+                import torch
+
+                # 5. 加载模型（如果还没加载）
+                if not hasattr(self, '_musetalk_models'):
+                    logger.info("Loading MuseTalk models...")
+                    audio_processor, vae, unet, pe = load_all_model()
+                    self._musetalk_models = {
+                        'audio_processor': audio_processor,
+                        'vae': vae,
+                        'unet': unet,
+                        'pe': pe
+                    }
+                    logger.info("MuseTalk models loaded")
+
+                models = self._musetalk_models
+
+                # 6. 加载 avatar 数据
+                import pickle
+
+                coords_path = os.path.join(avatar_path, "coords.pkl")
+                with open(coords_path, 'rb') as f:
+                    coord_list_cycle = pickle.load(f)
+
+                input_latent_list_cycle = torch.load(
+                    os.path.join(avatar_path, "latents.pt")
+                )
+
+                mask_coords_path = os.path.join(avatar_path, "mask_coords.pkl")
+                with open(mask_coords_path, 'rb') as f:
+                    mask_coords_list_cycle = pickle.load(f)
+
+                full_imgs_dir = os.path.join(avatar_path, "full_imgs")
+                mask_dir = os.path.join(avatar_path, "mask")
+
+                # 7. 处理音频
+                whisper_feature = models['audio_processor'].audio2feat(audio_path)
+                whisper_chunks = models['audio_processor'].feature2chunks(
+                    feature_array=whisper_feature,
+                    fps=fps
+                )
+
+                # 8. 逐帧生成
+                logger.info(f"Starting frame generation: {len(whisper_chunks)} frames")
+
+                for i, whisper_chunk in enumerate(whisper_chunks):
+                    # 获取当前帧的 latent 和坐标
+                    idx = i % len(coord_list_cycle)
+                    coord = coord_list_cycle[idx]
+                    input_latent = input_latent_list_cycle[idx]
+                    mask_coord = mask_coords_list_cycle[idx]
+
+                    # 生成帧
+                    with torch.no_grad():
+                        audio_feature = torch.from_numpy(whisper_chunk).unsqueeze(0).cuda()
+                        audio_feature = models['pe'](audio_feature)
+
+                        latent = models['unet'](
+                            input_latent.unsqueeze(0).cuda(),
+                            0,
+                            encoder_hidden_states=audio_feature
+                        ).sample
+
+                        output = models['vae'].decode(latent).sample
+                        output = output.squeeze().cpu().numpy().transpose(1, 2, 0)
+                        output = (output * 0.5 + 0.5) * 255
+                        output = output.astype(np.uint8)
+
+                    # 读取原始图片
+                    img_path = os.path.join(full_imgs_dir, f"{idx:08d}.png")
+                    frame = cv2.imread(img_path)
+
+                    # 混合生成的嘴部和原始图片
+                    x1, y1, x2, y2 = coord
+                    frame[y1:y2, x1:x2] = cv2.resize(output, (x2-x1, y2-y1))
+
+                    # 放入队列
+                    asyncio.run_coroutine_threadsafe(
+                        frame_queue.put(frame),
+                        asyncio.get_event_loop()
+                    )
+
+                    if i % 25 == 0:  # 每秒日志一次
+                        logger.info(f"Generated frame {i+1}/{len(whisper_chunks)}")
+
+                # 发送结束信号
+                asyncio.run_coroutine_threadsafe(
+                    frame_queue.put(None),
+                    asyncio.get_event_loop()
+                )
+
+                logger.info(f"Frame generation completed: {len(whisper_chunks)} frames")
+
+            except ImportError as e:
+                logger.error(f"Failed to import MuseTalk modules: {e}")
+                # 发送结束信号
+                asyncio.run_coroutine_threadsafe(
+                    frame_queue.put(None),
+                    asyncio.get_event_loop()
+                )
+
+            # 清理临时文件
+            try:
+                os.unlink(audio_path)
+            except:
+                pass
+
+        except Exception as e:
+            logger.error(f"Error in _generate_frames_sync: {e}", exc_info=True)
+            # 发送结束信号
+            asyncio.run_coroutine_threadsafe(
+                frame_queue.put(None),
+                asyncio.get_event_loop()
+            )
+
+    async def _mock_generate_frames_stream(
+        self,
+        avatar_id: str,
+        fps: int,
+        duration: int = 5
+    ):
+        """
+        Mock 帧流生成（用于测试）
+
+        生成简单的测试帧
+
+        Args:
+            avatar_id: Avatar ID
+            fps: 帧率
+            duration: 持续时间（秒）
+
+        Yields:
+            numpy.ndarray: 测试帧
+        """
+        import numpy as np
+
+        total_frames = fps * duration
+
+        for i in range(total_frames):
+            # 生成一个简单的彩色帧
+            frame = np.zeros((512, 512, 3), dtype=np.uint8)
+            # 添加一些变化（模拟动画）
+            color = int((i / total_frames) * 255)
+            frame[:, :] = [color, 128, 255 - color]
+
+            yield frame
+
+            # 模拟帧率
+            await asyncio.sleep(1.0 / fps)
+
     async def _mock_get_idle_video(
         self,
         avatar_id: str,

@@ -3,6 +3,9 @@ import json
 import logging
 from typing import Optional, Dict
 from datetime import datetime
+import os
+import cv2
+import numpy as np
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, status
 from fastapi.responses import JSONResponse
@@ -11,6 +14,7 @@ import uvicorn
 from config import settings
 from session_manager import get_session_manager
 from ai_models import get_ai_engine
+from webrtc_streamer import get_webrtc_streamer
 
 # 配置日志
 logging.basicConfig(
@@ -28,8 +32,49 @@ app = FastAPI(
 )
 
 
-# 活跃的 WebSocket 连接
+# 活跃的 WebSocket 连接（按 connection_id 索引）
 active_connections: Dict[str, WebSocket] = {}
+
+# Session 上下文管理（按 engine_session_id 索引）
+# 用于存储每个 session 的上下文信息（对话历史、状态等）
+session_contexts: Dict[str, dict] = {}
+
+
+async def load_idle_frames(avatar_id: str) -> list:
+    """
+    Load idle video frames for WebRTC streaming
+
+    Args:
+        avatar_id: Avatar identifier
+
+    Returns:
+        List of numpy arrays (frames)
+    """
+    try:
+        # 获取 avatar 目录
+        avatar_dir = f"/workspace/MuseTalk/results/v15/avatars/{avatar_id}"
+
+        if not os.path.exists(avatar_dir):
+            logger.warning(f"Avatar directory not found: {avatar_dir}")
+            return []
+
+        # 读取所有帧
+        frames = []
+        frame_files = sorted([f for f in os.listdir(avatar_dir) if f.endswith('.png')])
+
+        # 只加载前 125 帧（5秒 @ 25fps）
+        for frame_file in frame_files[:125]:
+            frame_path = os.path.join(avatar_dir, frame_file)
+            frame = cv2.imread(frame_path)
+            if frame is not None:
+                frames.append(frame)
+
+        logger.info(f"Loaded {len(frames)} idle frames for avatar {avatar_id}")
+        return frames
+
+    except Exception as e:
+        logger.error(f"Failed to load idle frames: {e}")
+        return []
 
 
 @app.get("/health")
@@ -42,10 +87,11 @@ async def health_check():
     }
 
 
-@app.websocket("/ws/{session_id}")
+@app.websocket("/ws/{connection_id}")
+@app.websocket("/ws/ws/{connection_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
-    session_id: str,
+    connection_id: str,
     token: str = Query(..., description="engine_token for authentication")
 ):
     """
@@ -53,20 +99,30 @@ async def websocket_endpoint(
 
     Args:
         websocket: WebSocket 连接对象
-        session_id: 会话 ID
+        connection_id: 连接标识符（可以是 session_id 或 user_{user_id}）
         token: engine_token（用于验证）
+
+    连接模式:
+        1. 新模式（基于 user_id）: connection_id = "user_{user_id}"
+           - 同一个 user_id 的所有 session 共享一个 WebSocket 连接
+           - 消息必须包含 engine_session_id 用于路由到正确的 session
+
+        2. 旧模式（基于 session_id）: connection_id = "{session_id}"
+           - 每个 session 独立的 WebSocket 连接（向后兼容）
 
     消息格式:
         客户端 -> 服务器:
             {
-                "type": "text" | "audio",
+                "type": "text_webrtc" | "text" | "audio" | "webrtc_offer" | "webrtc_ice_candidate",
                 "content": "用户输入的文本",
-                "data": "base64编码的音频数据"  # 仅 audio 类型需要
+                "engine_session_id": "uuid-here",  # 新模式必需，用于路由到正确的 session
+                "user_id": 123,  # WebRTC 相关消息必需
+                "avatar_id": "avatar_tutor_13"  # 可选
             }
 
         服务器 -> 客户端:
             {
-                "type": "text" | "audio" | "transcription" | "error",
+                "type": "text" | "audio" | "video" | "transcription" | "error",
                 "content": "AI 响应内容",
                 "role": "assistant",
                 "timestamp": "2024-01-01T12:00:00"
@@ -74,31 +130,66 @@ async def websocket_endpoint(
     """
     manager = get_session_manager()
 
-    # 验证 token
-    verified_session_id = manager.verify_token(token)
-    if not verified_session_id or verified_session_id != session_id:
-        logger.warning(f"Invalid token for session {session_id}")
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
+    # 判断连接模式
+    is_user_based = connection_id.startswith("user_")
 
-    # 获取会话信息
-    session = manager.get_session(session_id)
-    if not session:
-        logger.warning(f"Session {session_id} not found")
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
+    if is_user_based:
+        # 新模式：基于 user_id
+        user_id = connection_id.replace("user_", "")
+        logger.info(f"User-based connection mode: user_id={user_id}")
 
-    # 接受连接
-    await websocket.accept()
-    active_connections[session_id] = websocket
-    logger.info(f"WebSocket connected: session_id={session_id}, tutor_id={session.tutor_id}")
+        # 对于 user-based 模式，我们需要验证 token 但不需要匹配特定的 session_id
+        # 因为同一个用户可能有多个 session
+        verified_session_id = manager.verify_token(token)
+        if not verified_session_id:
+            logger.warning(f"Invalid token for user {user_id}")
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        # 获取第一个 session 的信息（用于获取 tutor_id 等基本信息）
+        # 注意：在 user-based 模式下，实际的 session 信息会从消息中的 engine_session_id 获取
+        session = manager.get_session(verified_session_id)
+        if not session:
+            logger.warning(f"Session {verified_session_id} not found")
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        # 接受连接
+        await websocket.accept()
+        active_connections[connection_id] = websocket
+        logger.info(f"WebSocket connected (user-based): connection_id={connection_id}, user_id={user_id}")
+
+    else:
+        # 旧模式：基于 session_id（向后兼容）
+        session_id = connection_id
+        logger.info(f"Session-based connection mode: session_id={session_id}")
+
+        # 验证 token
+        verified_session_id = manager.verify_token(token)
+        if not verified_session_id or verified_session_id != session_id:
+            logger.warning(f"Invalid token for session {session_id}")
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        # 获取会话信息
+        session = manager.get_session(session_id)
+        if not session:
+            logger.warning(f"Session {session_id} not found")
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        # 接受连接
+        await websocket.accept()
+        active_connections[connection_id] = websocket
+        logger.info(f"WebSocket connected (session-based): session_id={session_id}, tutor_id={session.tutor_id}")
 
     # 获取 AI 引擎（按 tutor_id 隔离）
     ai_engine = get_ai_engine(session.tutor_id)
 
     # 自动发送待机视频（如果启用了 Avatar）
-    if settings.enable_avatar:
-        # 尝试从 session 中获取 avatar_id，如果没有则使用默认值
+    # 注意：在 user-based 模式下，可能需要等待第一条消息来确定 avatar_id
+    if settings.enable_avatar and not is_user_based:
+        # 只在 session-based 模式下自动发送待机视频
         avatar_id = f"avatar_tutor_{session.tutor_id}"
         logger.info(f"Auto-sending idle video for avatar_id={avatar_id}")
 
@@ -122,8 +213,8 @@ async def websocket_endpoint(
                 logger.warning("Failed to get idle video, skipping auto-send")
         except Exception as e:
             logger.error(f"Error auto-sending idle video: {e}", exc_info=True)
-    else:
-        # 如果没有启用 Avatar，发送欢迎消息
+    elif not is_user_based:
+        # 如果没有启用 Avatar，发送欢迎消息（仅 session-based 模式）
         await send_message(websocket, {
             "type": "text",
             "content": f"欢迎！您已连接到虚拟导师 (Tutor ID: {session.tutor_id})",
@@ -132,21 +223,57 @@ async def websocket_endpoint(
         })
 
     try:
-
         # 消息处理循环
         while True:
             # 接收客户端消息
             data = await websocket.receive_text()
             message = json.loads(data)
 
-            # 更新会话活动时间
-            manager.update_activity(session_id)
+            # 在 user-based 模式下，从消息中获取 engine_session_id
+            if is_user_based:
+                engine_session_id = message.get("engine_session_id")
+                if not engine_session_id and message.get("type") not in ["webrtc_offer", "webrtc_ice_candidate"]:
+                    # WebRTC 相关消息不需要 engine_session_id
+                    await send_error(websocket, "engine_session_id is required in user-based mode")
+                    continue
 
-            # 处理消息
-            await handle_message(websocket, session, message, ai_engine)
+                # 获取或创建 session 上下文
+                if engine_session_id and engine_session_id not in session_contexts:
+                    # 验证 engine_session_id 是否有效
+                    target_session = manager.get_session(engine_session_id)
+                    if not target_session:
+                        await send_error(websocket, f"Invalid engine_session_id: {engine_session_id}")
+                        continue
+
+                    # 创建 session 上下文
+                    session_contexts[engine_session_id] = {
+                        "session": target_session,
+                        "ai_engine": get_ai_engine(target_session.tutor_id)
+                    }
+                    logger.info(f"Created session context for engine_session_id={engine_session_id}")
+
+                # 更新会话活动时间
+                if engine_session_id:
+                    manager.update_activity(engine_session_id)
+
+                # 处理消息（使用 engine_session_id 对应的 session）
+                if engine_session_id and engine_session_id in session_contexts:
+                    ctx = session_contexts[engine_session_id]
+                    await handle_message(websocket, ctx["session"], message, ctx["ai_engine"], is_user_based)
+                elif message.get("type") in ["webrtc_offer", "webrtc_ice_candidate"]:
+                    # WebRTC 相关消息不需要 session 上下文
+                    await handle_message(websocket, session, message, ai_engine, is_user_based)
+                else:
+                    await send_error(websocket, f"Session context not found: {engine_session_id}")
+
+            else:
+                # 旧模式：使用 connection_id 作为 session_id
+                session_id = connection_id
+                manager.update_activity(session_id)
+                await handle_message(websocket, session, message, ai_engine, is_user_based)
 
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected: session_id={session_id}")
+        logger.info(f"WebSocket disconnected: connection_id={connection_id}")
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON: {e}")
         await send_error(websocket, "Invalid message format")
@@ -155,11 +282,18 @@ async def websocket_endpoint(
         await send_error(websocket, f"Internal server error: {str(e)}")
     finally:
         # 清理连接
-        active_connections.pop(session_id, None)
-        logger.info(f"Connection cleaned up: session_id={session_id}")
+        active_connections.pop(connection_id, None)
+
+        # 在 user-based 模式下，清理该用户的所有 session 上下文
+        if is_user_based:
+            # 注意：这里不清理 session_contexts，因为用户可能会重新连接
+            # session_contexts 会在 session 过期时自动清理
+            logger.info(f"Connection cleaned up (user-based): connection_id={connection_id}")
+        else:
+            logger.info(f"Connection cleaned up (session-based): connection_id={connection_id}")
 
 
-async def handle_message(websocket: WebSocket, session, message: dict, ai_engine):
+async def handle_message(websocket: WebSocket, session, message: dict, ai_engine, is_user_based: bool = False):
     """
     处理客户端消息
 
@@ -168,6 +302,7 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
         session: 会话对象
         message: 客户端消息
         ai_engine: AI 引擎实例
+        is_user_based: 是否为 user-based 模式
     """
     msg_type = message.get("type")
     content = message.get("content", "")
@@ -214,50 +349,104 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
             await send_message(websocket, response_message)
             logger.info("Idle video sent successfully")
 
+        elif msg_type == "text_webrtc":
+            # 处理文本消息 - WebRTC 实时流式传输模式
+            avatar_id = message.get("avatar_id")  # 必需的 avatar_id
+            user_id = message.get("user_id")  # 前端传入的 user_id
+            engine_session_id = message.get("engine_session_id")  # 用于路由的 session_id
+
+            if not avatar_id:
+                await send_error(websocket, "avatar_id is required for WebRTC streaming")
+                return
+
+            if not user_id:
+                await send_error(websocket, "user_id is required for WebRTC streaming")
+                return
+
+            # 在 user-based 模式下，engine_session_id 应该已经在外层处理
+            # 这里记录日志以便调试
+            logger.info(f"Processing text with WebRTC streaming: avatar_id={avatar_id}, user_id={user_id}, engine_session_id={engine_session_id}, session_id={session.session_id}")
+
+            # 使用 WebRTC 流式传输（使用 user_id，同一用户共享）
+            response_text, audio_data = await ai_engine.stream_video_webrtc(
+                text=content,
+                avatar_id=avatar_id,
+                session_id=f"user_{user_id}",  # 使用 user_id 作为标识
+                fps=25
+            )
+
+            # 发送文本和音频响应（视频通过 WebRTC 实时流式传输）
+            await send_message(websocket, {
+                "type": "text",
+                "content": response_text,
+                "audio": audio_data,
+                "role": "assistant",
+                "timestamp": datetime.now().isoformat()
+            })
+
+            logger.info("WebRTC streaming response sent")
+
         elif msg_type == "text":
-            # 处理文本消息
+            # 处理文本消息 - 流式响应模式（立即发送文本和音频）
             avatar_id = message.get("avatar_id")  # 可选的 avatar_id
 
-            # LLM: 生成响应
+            # 1. LLM: 生成响应
             response = await ai_engine.process_text(
                 text=content,
                 tutor_id=session.tutor_id,
                 kb_id=session.kb_id
             )
 
-            # TTS: 文本转语音
+            # 2. 立即发送文本响应
+            await send_message(websocket, {
+                "type": "text",
+                "content": response,
+                "role": "assistant",
+                "timestamp": datetime.now().isoformat()
+            })
+            logger.info("Text response sent immediately")
+
+            # 3. TTS: 文本转语音
             audio_response = await ai_engine.synthesize_speech(response)
 
-            # 如果启用了 Avatar 且提供了 avatar_id，生成视频
-            video_response = None
-            if settings.enable_avatar and avatar_id:
-                logger.info(f"Generating video for avatar_id={avatar_id}")
-                video_response = await ai_engine.generate_video(
-                    audio_data=audio_response,
-                    avatar_id=avatar_id,
-                    fps=25
-                )
-
-            # 构建响应消息
-            response_message = {
-                "type": "video" if video_response else "audio",
+            # 4. 立即发送音频响应
+            await send_message(websocket, {
+                "type": "audio",
                 "content": response,
                 "audio": audio_response,  # base64 编码的音频
                 "role": "assistant",
                 "timestamp": datetime.now().isoformat()
-            }
+            })
+            logger.info("Audio response sent immediately")
 
-            # 如果有视频，添加视频数据
-            if video_response:
-                response_message["video"] = video_response  # base64 编码的视频
-                logger.info(f"Sending video response: video_size={len(video_response)} bytes")
-            else:
-                logger.info("Sending audio-only response")
+            # 5. 可选：后台生成视频（不阻塞）
+            if settings.enable_avatar and avatar_id:
+                logger.info(f"Starting background video generation for avatar_id={avatar_id}")
 
-            # 发送响应
-            logger.info(f"About to send response: type={response_message['type']}")
-            await send_message(websocket, response_message)
-            logger.info("Response sent successfully")
+                # 在后台异步生成视频
+                async def generate_video_background():
+                    try:
+                        video_response = await ai_engine.generate_video(
+                            audio_data=audio_response,
+                            avatar_id=avatar_id,
+                            fps=25
+                        )
+
+                        if video_response:
+                            # 视频生成完成后发送
+                            await send_message(websocket, {
+                                "type": "video",
+                                "content": response,
+                                "video": video_response,
+                                "role": "assistant",
+                                "timestamp": datetime.now().isoformat()
+                            })
+                            logger.info(f"Background video sent: video_size={len(video_response)} bytes")
+                    except Exception as e:
+                        logger.error(f"Background video generation failed: {e}")
+
+                # 启动后台任务（不等待）
+                asyncio.create_task(generate_video_background())
 
         elif msg_type == "audio":
             # 处理音频消息
@@ -312,6 +501,68 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
 
             # 发送响应
             await send_message(websocket, response_message)
+
+        elif msg_type == "webrtc_offer":
+            # 处理 WebRTC offer
+            offer_sdp = message.get("sdp")
+            user_id = message.get("user_id")  # 前端传入的 user_id
+            avatar_id = message.get("avatar_id", "avatar_tutor_13")  # 可选的 avatar_id
+
+            if not offer_sdp:
+                await send_error(websocket, "SDP offer is required")
+                return
+
+            if not user_id:
+                await send_error(websocket, "user_id is required for WebRTC")
+                return
+
+            logger.info(f"Received WebRTC offer from session {session.session_id}, user_id={user_id}")
+
+            # 获取 WebRTC streamer
+            webrtc_streamer = get_webrtc_streamer()
+
+            # 加载待机视频帧
+            idle_frames = await load_idle_frames(avatar_id)
+
+            # 处理 offer 并生成 answer（使用 user_id，同一用户共享）
+            answer_sdp = await webrtc_streamer.handle_offer(
+                session_id=f"user_{user_id}",  # 使用 user_id 作为标识
+                offer_sdp=offer_sdp,
+                idle_frames=idle_frames  # 传入待机帧
+            )
+
+            # 发送 answer 回客户端
+            await send_message(websocket, {
+                "type": "webrtc_answer",
+                "sdp": answer_sdp,
+                "timestamp": datetime.now().isoformat()
+            })
+
+            logger.info(f"WebRTC answer sent to user {user_id} with idle frames")
+
+        elif msg_type == "webrtc_ice_candidate":
+            # 处理 ICE candidate
+            candidate = message.get("candidate")
+            user_id = message.get("user_id")  # 前端传入的 user_id
+
+            if not candidate:
+                await send_error(websocket, "ICE candidate is required")
+                return
+
+            if not user_id:
+                await send_error(websocket, "user_id is required for WebRTC")
+                return
+
+            logger.info(f"Received ICE candidate from session {session.session_id}, user_id={user_id}")
+
+            # 获取 WebRTC streamer
+            webrtc_streamer = get_webrtc_streamer()
+
+            # 添加 ICE candidate（使用 user_id）
+            await webrtc_streamer.add_ice_candidate(
+                session_id=f"user_{user_id}",  # 使用 user_id 作为标识
+                candidate=candidate
+            )
 
         else:
             await send_error(websocket, f"Unsupported message type: {msg_type}")

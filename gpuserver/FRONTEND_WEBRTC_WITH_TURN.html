@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC 实时视频测试（使用 TURN）</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 1200px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 30px;
+        }
+
+        .video-section {
+            background: #f7f7f7;
+            border-radius: 15px;
+            padding: 20px;
+            position: relative;
+        }
+
+        .video-section h2 {
+            font-size: 18px;
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        #avatar-video {
+            width: 100%;
+            height: auto;
+            border-radius: 10px;
+            background: #000;
+            min-height: 300px;
+        }
+
+        .status {
+            position: absolute;
+            top: 30px;
+            right: 30px;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            background: rgba(255,255,255,0.9);
+        }
+
+        .status.connecting {
+            color: #f59e0b;
+        }
+
+        .status.connected {
+            color: #10b981;
+        }
+
+        .status.error {
+            color: #ef4444;
+        }
+
+        .chat-section {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chat-section h2 {
+            font-size: 18px;
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .messages {
+            flex: 1;
+            background: #f7f7f7;
+            border-radius: 10px;
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 15px;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            padding: 12px 15px;
+            border-radius: 10px;
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+
+        .message.user {
+            background: #667eea;
+            color: white;
+            margin-left: auto;
+        }
+
+        .message.assistant {
+            background: white;
+            color: #333;
+            border: 1px solid #e5e7eb;
+        }
+
+        .input-area {
+            display: flex;
+            gap: 10px;
+        }
+
+        .input-area input {
+            flex: 1;
+            padding: 12px 15px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .input-area input:focus {
+            border-color: #667eea;
+        }
+
+        .input-area button {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .input-area button:hover {
+            transform: translateY(-2px);
+        }
+
+        .input-area button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .logs {
+            background: #1e293b;
+            color: #94a3b8;
+            padding: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .logs .log-entry {
+            margin-bottom: 5px;
+        }
+
+        .logs .log-entry.success {
+            color: #10b981;
+        }
+
+        .logs .log-entry.error {
+            color: #ef4444;
+        }
+
+        .logs .log-entry.info {
+            color: #3b82f6;
+        }
+
+        @media (max-width: 768px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎥 WebRTC 实时视频测试</h1>
+            <p>使用公共 TURN 服务器进行 NAT 穿透</p>
+        </div>
+
+        <div class="content">
+            <div class="video-section">
+                <h2>视频流</h2>
+                <div class="status connecting" id="status">连接中...</div>
+                <video id="avatar-video" autoplay playsinline></video>
+            </div>
+
+            <div class="chat-section">
+                <h2>对话</h2>
+                <div class="messages" id="messages">
+                    <div class="message assistant">
+                        你好！我是 AI 助手。WebRTC 连接建立后，你可以开始对话。
+                    </div>
+                </div>
+                <div class="input-area">
+                    <input
+                        type="text"
+                        id="message-input"
+                        placeholder="输入消息..."
+                        disabled
+                    />
+                    <button id="send-button" disabled>发送</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="logs" id="logs">
+            <div class="log-entry info">📋 系统日志</div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================
+        // WebRTC 客户端（使用公共 TURN 服务器）
+        // ============================================
+        class AvatarWebRTCClient {
+            constructor(websocket, videoElement) {
+                this.websocket = websocket;
+                this.videoElement = videoElement;
+                this.peerConnection = null;
+                this.isConnected = false;
+            }
+
+            async initialize() {
+                log('🚀 初始化 WebRTC 连接...', 'info');
+
+                // 创建 RTCPeerConnection，配置 TURN 服务器
+                this.peerConnection = new RTCPeerConnection({
+                    iceServers: [
+                        // STUN 服务器
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+
+                        // 公共 TURN 服务器（免费）
+                        {
+                            urls: [
+                                'turn:openrelay.metered.ca:80',
+                                'turn:openrelay.metered.ca:443',
+                                'turn:openrelay.metered.ca:443?transport=tcp'
+                            ],
+                            username: 'openrelayproject',
+                            credential: 'openrelayproject'
+                        }
+                    ],
+                    // 可选：强制使用 TURN 中继（测试用）
+                    // iceTransportPolicy: 'relay'
+                });
+
+                log('✓ RTCPeerConnection 已创建', 'success');
+
+                // 监听远程视频流
+                this.peerConnection.ontrack = (event) => {
+                    log('✓ 收到远程视频流', 'success');
+                    if (event.streams && event.streams[0]) {
+                        this.videoElement.srcObject = event.streams[0];
+                        this.videoElement.play().catch(err => {
+                            log('✗ 视频播放失败: ' + err.message, 'error');
+                        });
+                        this.isConnected = true;
+                        updateStatus('connected', '已连接');
+                    }
+                };
+
+                // 监听 ICE candidates
+                this.peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        const type = event.candidate.type;
+                        log(`📡 ICE candidate: ${type}`, 'info');
+
+                        this.websocket.send(JSON.stringify({
+                            type: 'webrtc_ice_candidate',
+                            candidate: event.candidate
+                        }));
+                    } else {
+                        log('✓ ICE candidate 收集完成', 'success');
+                    }
+                };
+
+                // 监听 ICE 连接状态
+                this.peerConnection.oniceconnectionstatechange = () => {
+                    const state = this.peerConnection.iceConnectionState;
+                    log(`ICE 连接状态: ${state}`, 'info');
+
+                    if (state === 'connected' || state === 'completed') {
+                        log('✓ ICE 连接成功', 'success');
+                    } else if (state === 'failed') {
+                        log('✗ ICE 连接失败', 'error');
+                        updateStatus('error', '连接失败');
+                    }
+                };
+
+                // 监听 ICE gathering 状态
+                this.peerConnection.onicegatheringstatechange = () => {
+                    log(`ICE gathering 状态: ${this.peerConnection.iceGatheringState}`, 'info');
+                };
+
+                // 监听连接状态
+                this.peerConnection.onconnectionstatechange = () => {
+                    const state = this.peerConnection.connectionState;
+                    log(`WebRTC 连接状态: ${state}`, 'info');
+
+                    if (state === 'connected') {
+                        log('✓ WebRTC 连接成功建立', 'success');
+                        updateStatus('connected', '已连接');
+                        enableChat();
+                    } else if (state === 'failed' || state === 'disconnected') {
+                        updateStatus('error', '连接失败');
+                        disableChat();
+                    }
+                };
+
+                // 创建并发送 offer
+                try {
+                    const offer = await this.peerConnection.createOffer({
+                        offerToReceiveVideo: true,
+                        offerToReceiveAudio: false
+                    });
+
+                    await this.peerConnection.setLocalDescription(offer);
+                    log('✓ Local description 已设置', 'success');
+
+                    log('📤 发送 WebRTC offer', 'info');
+                    this.websocket.send(JSON.stringify({
+                        type: 'webrtc_offer',
+                        sdp: offer.sdp
+                    }));
+                } catch (error) {
+                    log('✗ 创建 offer 失败: ' + error.message, 'error');
+                    updateStatus('error', '初始化失败');
+                }
+            }
+
+            async handleAnswer(answerSdp) {
+                try {
+                    const answer = new RTCSessionDescription({
+                        type: 'answer',
+                        sdp: answerSdp
+                    });
+
+                    await this.peerConnection.setRemoteDescription(answer);
+                    log('✓ Remote description 已设置', 'success');
+                } catch (error) {
+                    log('✗ 设置 answer 失败: ' + error.message, 'error');
+                }
+            }
+
+            close() {
+                if (this.peerConnection) {
+                    this.peerConnection.close();
+                    this.peerConnection = null;
+                }
+                this.isConnected = false;
+                log('WebRTC 连接已关闭', 'info');
+            }
+        }
+
+        // ============================================
+        // 主应用逻辑
+        // ============================================
+        let websocket = null;
+        let webrtcClient = null;
+
+        // 配置（请修改为你的服务器地址）
+        const CONFIG = {
+            // GPU Server 地址（通过隧道访问）
+            gpuServerUrl: 'ws://localhost:9000',  // 修改为你的 GPU Server 地址
+
+            // 或者如果通过 Web Server 代理：
+            // gpuServerUrl: 'wss://your-web-server.com/gpu',
+        };
+
+        async function initialize() {
+            log('🔧 开始初始化...', 'info');
+
+            try {
+                // 1. 创建 session（这里简化为直接调用 GPU Server）
+                // 实际使用时应该通过 Web Server 创建
+                const sessionResponse = await fetch('http://localhost:9000/mgmt/v1/sessions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tutor_id: 13,
+                        kb_id: null
+                    })
+                });
+
+                if (!sessionResponse.ok) {
+                    throw new Error('创建 session 失败');
+                }
+
+                const sessionData = await sessionResponse.json();
+                const { session_id, engine_token } = sessionData;
+                log(`✓ Session 创建成功: ${session_id}`, 'success');
+
+                // 2. 连接 WebSocket
+                const wsUrl = `${CONFIG.gpuServerUrl}/ws/ws/${session_id}?token=${engine_token}`;
+                log(`📡 连接 WebSocket: ${wsUrl}`, 'info');
+
+                websocket = new WebSocket(wsUrl);
+
+                websocket.onopen = async () => {
+                    log('✓ WebSocket 连接成功', 'success');
+                    updateStatus('connecting', '建立 WebRTC...');
+
+                    // 3. 初始化 WebRTC
+                    const videoElement = document.getElementById('avatar-video');
+                    webrtcClient = new AvatarWebRTCClient(websocket, videoElement);
+                    await webrtcClient.initialize();
+                };
+
+                websocket.onmessage = (event) => {
+                    handleWebSocketMessage(JSON.parse(event.data));
+                };
+
+                websocket.onerror = (error) => {
+                    log('✗ WebSocket 错误', 'error');
+                    updateStatus('error', 'WebSocket 错误');
+                };
+
+                websocket.onclose = () => {
+                    log('WebSocket 连接关闭', 'info');
+                    updateStatus('error', '连接断开');
+                    disableChat();
+                };
+
+            } catch (error) {
+                log('✗ 初始化失败: ' + error.message, 'error');
+                updateStatus('error', '初始化失败');
+            }
+        }
+
+        function handleWebSocketMessage(message) {
+            log(`📨 收到消息: ${message.type}`, 'info');
+
+            switch(message.type) {
+                case 'webrtc_answer':
+                    webrtcClient.handleAnswer(message.sdp);
+                    break;
+
+                case 'video':
+                    log('收到待机视频', 'info');
+                    break;
+
+                case 'text':
+                    addMessage('assistant', message.content);
+                    break;
+
+                case 'audio':
+                    log('收到音频响应', 'info');
+                    // 可以在这里播放音频
+                    break;
+
+                case 'error':
+                    log('✗ 服务器错误: ' + message.content, 'error');
+                    break;
+
+                default:
+                    log('未知消息类型: ' + message.type, 'info');
+            }
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('message-input');
+            const text = input.value.trim();
+
+            if (!text || !websocket) return;
+
+            addMessage('user', text);
+            input.value = '';
+
+            log(`📤 发送消息: ${text}`, 'info');
+            websocket.send(JSON.stringify({
+                type: 'text_webrtc',
+                content: text,
+                avatar_id: 'avatar_tutor_13'
+            }));
+        }
+
+        // ============================================
+        // UI 辅助函数
+        // ============================================
+        function log(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+
+            const timestamp = new Date().toLocaleTimeString();
+            entry.textContent = `[${timestamp}] ${message}`;
+
+            logs.appendChild(entry);
+            logs.scrollTop = logs.scrollHeight;
+
+            console.log(`[${type.toUpperCase()}] ${message}`);
+        }
+
+        function updateStatus(state, text) {
+            const status = document.getElementById('status');
+            status.className = `status ${state}`;
+            status.textContent = text;
+        }
+
+        function addMessage(role, content) {
+            const messages = document.getElementById('messages');
+            const message = document.createElement('div');
+            message.className = `message ${role}`;
+            message.textContent = content;
+            messages.appendChild(message);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function enableChat() {
+            document.getElementById('message-input').disabled = false;
+            document.getElementById('send-button').disabled = false;
+            log('✓ 聊天功能已启用', 'success');
+        }
+
+        function disableChat() {
+            document.getElementById('message-input').disabled = true;
+            document.getElementById('send-button').disabled = true;
+        }
+
+        // ============================================
+        // 事件监听
+        // ============================================
+        document.getElementById('send-button').addEventListener('click', sendMessage);
+        document.getElementById('message-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        // 页面加载时初始化
+        window.addEventListener('load', () => {
+            log('📱 页面加载完成', 'info');
+            log('🔍 检查 WebRTC 支持...', 'info');
+
+            if (!window.RTCPeerConnection) {
+                log('✗ 浏览器不支持 WebRTC', 'error');
+                updateStatus('error', '浏览器不支持');
+                return;
+            }
+
+            log('✓ 浏览器支持 WebRTC', 'success');
+            initialize();
+        });
+
+        // 页面卸载时清理
+        window.addEventListener('beforeunload', () => {
+            if (webrtcClient) webrtcClient.close();
+            if (websocket) websocket.close();
+        });
+    </script>
+</body>
+</html>

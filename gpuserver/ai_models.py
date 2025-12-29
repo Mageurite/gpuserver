@@ -231,6 +231,64 @@ class AIEngine:
 
         return video_data
 
+    async def stream_video_webrtc(
+        self,
+        text: str,
+        avatar_id: str,
+        session_id: str,
+        fps: int = 25
+    ):
+        """
+        通过 WebRTC 实时流式传输视频
+
+        处理流程:
+        1. LLM 生成文本响应
+        2. TTS 生成音频
+        3. MuseTalk 逐帧生成视频
+        4. 每生成一帧就通过 WebRTC 推送
+
+        Args:
+            text: 用户输入文本
+            avatar_id: Avatar ID
+            session_id: 会话 ID（用于 WebRTC 连接）
+            fps: 视频帧率
+
+        Returns:
+            tuple: (response_text, audio_data) 文本响应和音频数据
+        """
+        logger.info(f"Starting WebRTC video streaming (tutor_id={self.tutor_id}): avatar_id={avatar_id}")
+
+        # 1. LLM 生成文本响应
+        response_text = await self.process_text(
+            text=text,
+            tutor_id=self.tutor_id
+        )
+
+        # 2. TTS 生成音频
+        audio_data = await self.synthesize_speech(response_text)
+
+        # 3. 获取 WebRTC streamer
+        from webrtc_streamer import get_webrtc_streamer
+        streamer = get_webrtc_streamer()
+
+        # 4. 实时生成并推流帧
+        frame_count = 0
+        async for frame in self.video_engine.generate_frames_stream(
+            audio_data=audio_data,
+            avatar_id=avatar_id,
+            fps=fps
+        ):
+            # 推送帧到 WebRTC
+            await streamer.stream_frame(session_id, frame)
+            frame_count += 1
+
+            if frame_count % 25 == 0:  # 每秒日志一次
+                logger.info(f"Streamed {frame_count} frames to session {session_id}")
+
+        logger.info(f"WebRTC streaming completed: {frame_count} frames")
+
+        return response_text, audio_data
+
 
 # 按 tutor_id 隔离的 AI 引擎实例缓存
 _tutor_engines: Dict[int, AIEngine] = {}
