@@ -93,17 +93,45 @@ async def websocket_endpoint(
     active_connections[session_id] = websocket
     logger.info(f"WebSocket connected: session_id={session_id}, tutor_id={session.tutor_id}")
 
-    # 发送欢迎消息
-    await send_message(websocket, {
-        "type": "text",
-        "content": f"欢迎！您已连接到虚拟导师 (Tutor ID: {session.tutor_id})",
-        "role": "assistant",
-        "timestamp": datetime.now().isoformat()
-    })
+    # 获取 AI 引擎（按 tutor_id 隔离）
+    ai_engine = get_ai_engine(session.tutor_id)
+
+    # 自动发送待机视频（如果启用了 Avatar）
+    if settings.enable_avatar:
+        # 尝试从 session 中获取 avatar_id，如果没有则使用默认值
+        avatar_id = f"avatar_tutor_{session.tutor_id}"
+        logger.info(f"Auto-sending idle video for avatar_id={avatar_id}")
+
+        try:
+            video_response = await ai_engine.get_idle_video(
+                avatar_id=avatar_id,
+                duration=5,  # 5秒循环视频
+                fps=25
+            )
+
+            if video_response:
+                await send_message(websocket, {
+                    "type": "video",
+                    "content": "",  # 待机视频没有文本内容
+                    "video": video_response,
+                    "role": "assistant",
+                    "timestamp": datetime.now().isoformat()
+                })
+                logger.info(f"Idle video sent automatically: video_size={len(video_response)} bytes")
+            else:
+                logger.warning("Failed to get idle video, skipping auto-send")
+        except Exception as e:
+            logger.error(f"Error auto-sending idle video: {e}", exc_info=True)
+    else:
+        # 如果没有启用 Avatar，发送欢迎消息
+        await send_message(websocket, {
+            "type": "text",
+            "content": f"欢迎！您已连接到虚拟导师 (Tutor ID: {session.tutor_id})",
+            "role": "assistant",
+            "timestamp": datetime.now().isoformat()
+        })
 
     try:
-        # 获取 AI 引擎（按 tutor_id 隔离）
-        ai_engine = get_ai_engine(session.tutor_id)
 
         # 消息处理循环
         while True:
@@ -147,7 +175,46 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
     logger.info(f"Received message: session_id={session.session_id}, type={msg_type}")
 
     try:
-        if msg_type == "text":
+        if msg_type == "init":
+            # 处理初始化消息 - 返回待机视频（idle video）
+            avatar_id = message.get("avatar_id")  # 必需的 avatar_id
+
+            if not avatar_id:
+                await send_error(websocket, "avatar_id is required for init message")
+                return
+
+            logger.info(f"Processing init message: avatar_id={avatar_id}")
+
+            # 获取待机视频（不生成 TTS，只返回循环的静态视频）
+            video_response = None
+            if settings.enable_avatar:
+                logger.info(f"Getting idle video for avatar_id={avatar_id}")
+                video_response = await ai_engine.get_idle_video(
+                    avatar_id=avatar_id,
+                    duration=5,  # 5秒循环视频
+                    fps=25
+                )
+
+            if video_response:
+                # 构建响应消息 - 只包含视频，不包含音频和文本
+                response_message = {
+                    "type": "video",
+                    "content": "",  # 待机视频没有文本内容
+                    "video": video_response,  # base64 编码的视频
+                    "role": "assistant",
+                    "timestamp": datetime.now().isoformat()
+                }
+                logger.info(f"Sending idle video: video_size={len(video_response)} bytes")
+            else:
+                # 如果无法获取待机视频，返回错误
+                await send_error(websocket, "Failed to get idle video")
+                return
+
+            # 发送响应
+            await send_message(websocket, response_message)
+            logger.info("Idle video sent successfully")
+
+        elif msg_type == "text":
             # 处理文本消息
             avatar_id = message.get("avatar_id")  # 可选的 avatar_id
 

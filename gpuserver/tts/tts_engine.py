@@ -122,22 +122,56 @@ class TTSEngine:
         """
         Mock 合成（用于测试）
 
+        生成一个有效的 WAV 音频文件（静音），这样可以被 ffmpeg 正确处理
+
         Args:
             text: 要合成的文本
 
         Returns:
-            str: Mock 音频数据（base64 编码）
+            str: Mock 音频数据（base64 编码的 WAV 文件）
         """
+        import wave
+        import tempfile
+        import os
+
         # 模拟处理延迟
         await asyncio.sleep(0.4)
 
-        # Mock 音频数据
-        mock_audio = b"MOCK_TTS_AUDIO_DATA_" + text.encode("utf-8")[:50]
-        audio_base64 = base64.b64encode(mock_audio).decode("utf-8")
+        # 生成一个有效的 WAV 文件（2秒静音）
+        sample_rate = 16000  # 16kHz
+        duration = 2  # 2秒
+        num_samples = sample_rate * duration
 
-        logger.info(f"Mock TTS synthesized: {len(audio_base64)} bytes")
+        # 创建临时 WAV 文件
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
+            tmp_path = tmp_file.name
 
-        return audio_base64
+        try:
+            # 写入 WAV 文件
+            with wave.open(tmp_path, 'wb') as wav_file:
+                wav_file.setnchannels(1)  # 单声道
+                wav_file.setsampwidth(2)  # 16-bit
+                wav_file.setframerate(sample_rate)
+
+                # 写入静音数据（全零）
+                silence = b'\x00\x00' * num_samples
+                wav_file.writeframes(silence)
+
+            # 读取并编码为 base64
+            with open(tmp_path, 'rb') as f:
+                audio_bytes = f.read()
+                audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+
+            logger.info(f"Mock TTS synthesized: {len(audio_bytes)} bytes WAV file")
+
+            return audio_base64
+
+        finally:
+            # 清理临时文件
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
 
 
 # 全局 TTS 引擎实例

@@ -198,6 +198,39 @@ class AIEngine:
 
         return video_data
 
+    async def get_idle_video(
+        self,
+        avatar_id: str,
+        duration: int = 5,
+        fps: int = 25
+    ) -> Optional[str]:
+        """
+        获取 Avatar 的待机视频（循环播放的静态视频）
+
+        Args:
+            avatar_id: Avatar ID
+            duration: 视频时长（秒）
+            fps: 视频帧率
+
+        Returns:
+            str: base64 编码的待机视频数据，失败返回 None
+        """
+        logger.info(f"Getting idle video (tutor_id={self.tutor_id}): avatar_id={avatar_id}")
+
+        # 调用 Video 引擎获取待机视频
+        video_data = await self.video_engine.get_idle_video(
+            avatar_id=avatar_id,
+            duration=duration,
+            fps=fps
+        )
+
+        if video_data:
+            logger.info(f"Idle video retrieved: length={len(video_data)}")
+        else:
+            logger.error("Failed to get idle video")
+
+        return video_data
+
 
 # 按 tutor_id 隔离的 AI 引擎实例缓存
 _tutor_engines: Dict[int, AIEngine] = {}
