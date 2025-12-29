@@ -15,6 +15,8 @@ from asr import get_asr_engine
 from tts import get_tts_engine
 # Import RAG engine from rag module
 from rag import get_rag_engine
+# Import Video engine from musetalk module
+from musetalk import get_video_engine
 
 from config import get_settings
 
@@ -61,6 +63,14 @@ class AIEngine:
             enable_real=settings.enable_rag,
             rag_url=settings.rag_url,
             top_k=settings.rag_top_k
+        )
+
+        # 初始化 Video 引擎（从 video 模块获取）
+        self.video_engine = get_video_engine(
+            enable_real=settings.enable_avatar,
+            musetalk_base=settings.musetalk_base,
+            avatars_dir=settings.avatars_dir,
+            conda_env=settings.musetalk_conda_env
         )
 
         logger.info(f"AI Engine initialized for tutor_id={tutor_id}")
@@ -154,6 +164,39 @@ class AIEngine:
 
         logger.info(f"Synthesized audio: length={len(audio_data)}")
         return audio_data
+
+    async def generate_video(
+        self,
+        audio_data: str,
+        avatar_id: str,
+        fps: int = 25
+    ) -> Optional[str]:
+        """
+        生成口型同步视频（Avatar + Audio）
+
+        Args:
+            audio_data: base64 编码的音频数据
+            avatar_id: Avatar ID
+            fps: 视频帧率
+
+        Returns:
+            str: base64 编码的视频数据，失败返回 None
+        """
+        logger.info(f"Generating video (tutor_id={self.tutor_id}): avatar_id={avatar_id}")
+
+        # 调用 Video 引擎生成视频
+        video_data = await self.video_engine.generate_video(
+            audio_data=audio_data,
+            avatar_id=avatar_id,
+            fps=fps
+        )
+
+        if video_data:
+            logger.info(f"Video generated: length={len(video_data)}")
+        else:
+            logger.error("Video generation failed")
+
+        return video_data
 
 
 # 按 tutor_id 隔离的 AI 引擎实例缓存

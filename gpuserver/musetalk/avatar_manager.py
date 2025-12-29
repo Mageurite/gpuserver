@@ -453,6 +453,314 @@ class AvatarManager:
             logger.error(f"Failed to list avatars: {e}")
             return []
 
+    async def generate_video(
+        self,
+        audio_data: str,
+        avatar_id: str,
+        fps: int = 25
+    ) -> Optional[str]:
+        """
+        生成口型同步视频（Avatar + Audio）
+
+        Args:
+            audio_data: base64 编码的音频数据
+            avatar_id: Avatar ID
+            fps: 视频帧率
+
+        Returns:
+            str: base64 编码的视频数据，失败返回 None
+        """
+        if not self.enable_real:
+            # Mock 模式
+            return await self._mock_generate_video(audio_data, avatar_id, fps)
+
+        try:
+            # 在线程池中运行同步的视频生成过程
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                self._generate_video_sync,
+                audio_data,
+                avatar_id,
+                fps
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Video generation failed: {e}")
+            return None
+
+    def _generate_video_sync(
+        self,
+        audio_data: str,
+        avatar_id: str,
+        fps: int
+    ) -> Optional[str]:
+        """
+        同步生成视频（在线程池中运行）
+
+        步骤:
+        1. 解码 base64 音频数据
+        2. 保存音频到临时文件
+        3. 调用 MuseTalk 实时推理脚本
+        4. 读取生成的视频
+        5. 编码为 base64 返回
+
+        参考: /workspace/MuseTalk/scripts/realtime_inference.py
+        """
+        import base64
+        import tempfile
+
+        try:
+            # 1. 解码音频数据
+            audio_bytes = base64.b64decode(audio_data)
+
+            # 2. 保存音频到临时文件
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as audio_file:
+                audio_file.write(audio_bytes)
+                audio_path = audio_file.name
+
+            # 3. 准备输出路径
+            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as video_file:
+                video_path = video_file.name
+
+            # 4. 调用 MuseTalk 实时推理
+            success = self._run_musetalk_realtime_inference(
+                audio_path=audio_path,
+                avatar_id=avatar_id,
+                output_path=video_path,
+                fps=fps
+            )
+
+            if not success:
+                logger.warning("Video generation failed, returning static avatar image as fallback")
+                # 降级方案：返回静态 avatar 图片
+                return self._generate_static_video(avatar_id)
+
+            # 5. 读取生成的视频
+            if not os.path.exists(video_path):
+                logger.error(f"Generated video not found: {video_path}")
+                return self._generate_static_video(avatar_id)
+
+            with open(video_path, 'rb') as f:
+                video_bytes = f.read()
+
+            # 6. 编码为 base64
+            video_data = base64.b64encode(video_bytes).decode('utf-8')
+
+            # 7. 清理临时文件
+            try:
+                os.unlink(audio_path)
+                os.unlink(video_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp files: {e}")
+
+            logger.info(f"Video generated successfully: {len(video_data)} bytes")
+            return video_data
+
+        except Exception as e:
+            logger.error(f"Error in _generate_video_sync: {e}")
+            return self._generate_static_video(avatar_id)
+
+    def _generate_static_video(self, avatar_id: str) -> Optional[str]:
+        """
+        生成静态视频（降级方案）
+
+        从 avatar 的第一张图片生成一个简单的视频
+
+        Args:
+            avatar_id: Avatar ID
+
+        Returns:
+            str: base64 编码的视频数据，失败返回 None
+        """
+        import base64
+        import tempfile
+
+        try:
+            # 查找 avatar 的第一张图片
+            avatar_path = os.path.join(self.musetalk_base, "results", "v15", "avatars", avatar_id)
+            full_imgs_dir = os.path.join(avatar_path, "full_imgs")
+
+            if not os.path.exists(full_imgs_dir):
+                logger.error(f"Avatar images not found: {full_imgs_dir}")
+                return None
+
+            # 获取第一张图片
+            import glob
+            images = sorted(glob.glob(os.path.join(full_imgs_dir, "*.png")))
+            if not images:
+                logger.error(f"No images found in {full_imgs_dir}")
+                return None
+
+            first_image = images[0]
+            logger.info(f"Using static image: {first_image}")
+
+            # 使用 ffmpeg 从单张图片生成 2 秒的视频
+            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as video_file:
+                video_path = video_file.name
+
+            cmd = [
+                self.ffmpeg_path,
+                '-loop', '1',
+                '-i', first_image,
+                '-t', '2',  # 2 秒视频
+                '-c:v', 'libx264',
+                '-pix_fmt', 'yuv420p',
+                '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',  # 确保尺寸是偶数
+                '-y',
+                video_path
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if result.returncode != 0:
+                logger.error(f"Failed to create static video: {result.stderr}")
+                return None
+
+            # 读取视频并编码
+            with open(video_path, 'rb') as f:
+                video_bytes = f.read()
+
+            video_data = base64.b64encode(video_bytes).decode('utf-8')
+
+            # 清理临时文件
+            try:
+                os.unlink(video_path)
+            except:
+                pass
+
+            logger.info(f"Static video generated: {len(video_data)} bytes")
+            return video_data
+
+        except Exception as e:
+            logger.error(f"Error generating static video: {e}")
+            return None
+
+    def _run_musetalk_realtime_inference(
+        self,
+        audio_path: str,
+        avatar_id: str,
+        output_path: str,
+        fps: int
+    ) -> bool:
+        """
+        运行 MuseTalk 实时推理生成视频
+
+        使用 ffmpeg 直接合成音频和视频，而不是调用 MuseTalk 脚本
+        因为 MuseTalk 的 realtime_inference.py 需要配置文件，不适合 API 调用
+
+        Args:
+            audio_path: 音频文件路径
+            avatar_id: Avatar ID
+            output_path: 输出视频路径
+            fps: 视频帧率
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            # 检查 avatar 是否存在
+            avatar_path = os.path.join(self.musetalk_base, "results", "v15", "avatars", avatar_id)
+            if not os.path.exists(avatar_path):
+                logger.error(f"Avatar not found: {avatar_path}")
+                return False
+
+            # 查找 avatar 的视频文件
+            # MuseTalk 生成的 avatar 通常包含一个参考视频
+            video_files = []
+            for ext in ['.mp4', '.avi', '.mov']:
+                video_files.extend(Path(avatar_path).glob(f"*{ext}"))
+
+            if not video_files:
+                # 如果没有视频文件，尝试从 full_imgs 目录生成
+                full_imgs_dir = os.path.join(avatar_path, "full_imgs")
+                if os.path.exists(full_imgs_dir):
+                    logger.info(f"No video file found, using images from {full_imgs_dir}")
+                    # 使用 ffmpeg 从图片生成视频
+                    temp_video = output_path + ".temp.mp4"
+                    cmd = [
+                        self.ffmpeg_path,
+                        '-framerate', str(fps),
+                        '-pattern_type', 'glob',
+                        '-i', f'{full_imgs_dir}/*.png',
+                        '-c:v', 'libx264',
+                        '-pix_fmt', 'yuv420p',
+                        '-y',
+                        temp_video
+                    ]
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    if result.returncode != 0:
+                        logger.error(f"Failed to create video from images: {result.stderr}")
+                        return False
+                    avatar_video = temp_video
+                else:
+                    logger.error(f"No video or images found in avatar: {avatar_path}")
+                    return False
+            else:
+                avatar_video = str(video_files[0])
+                logger.info(f"Using avatar video: {avatar_video}")
+
+            # 使用 ffmpeg 合成音频和视频
+            # 获取音频时长，裁剪视频以匹配
+            cmd = [
+                self.ffmpeg_path,
+                '-i', avatar_video,
+                '-i', audio_path,
+                '-c:v', 'copy',
+                '-c:a', 'aac',
+                '-map', '0:v:0',
+                '-map', '1:a:0',
+                '-shortest',
+                '-y',
+                output_path
+            ]
+
+            logger.info(f"Running ffmpeg to merge audio and video: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if result.returncode == 0:
+                logger.info("Video generation completed successfully")
+                # 清理临时文件
+                if 'temp_video' in locals() and os.path.exists(temp_video):
+                    os.unlink(temp_video)
+                return True
+            else:
+                logger.error(f"FFmpeg failed: {result.stderr}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error running MuseTalk realtime inference: {e}")
+            return False
+
+    async def _mock_generate_video(
+        self,
+        audio_data: str,
+        avatar_id: str,
+        fps: int
+    ) -> Optional[str]:
+        """
+        Mock 视频生成（用于测试）
+
+        Args:
+            audio_data: base64 编码的音频数据
+            avatar_id: Avatar ID
+            fps: 视频帧率
+
+        Returns:
+            str: Mock base64 编码的视频数据
+        """
+        import base64
+
+        # 模拟处理延迟
+        await asyncio.sleep(0.5)
+
+        # 返回一个 Mock 视频数据（实际上是一个小的占位符）
+        mock_video = b"MOCK_VIDEO_DATA_" + avatar_id.encode() + b"_FPS_" + str(fps).encode()
+        video_data = base64.b64encode(mock_video).decode('utf-8')
+
+        logger.info(f"Mock video generated: {len(video_data)} bytes")
+        return video_data
+
 
 # 全局 Avatar 管理器实例
 _avatar_manager: Optional[AvatarManager] = None

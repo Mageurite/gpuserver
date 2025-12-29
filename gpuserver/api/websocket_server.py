@@ -149,23 +149,55 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
     try:
         if msg_type == "text":
             # 处理文本消息
+            avatar_id = message.get("avatar_id")  # 可选的 avatar_id
+
+            # LLM: 生成响应
             response = await ai_engine.process_text(
                 text=content,
                 tutor_id=session.tutor_id,
                 kb_id=session.kb_id
             )
 
-            # 发送文本响应
-            await send_message(websocket, {
-                "type": "text",
+            # TTS: 文本转语音
+            audio_response = await ai_engine.synthesize_speech(response)
+
+            # 如果启用了 Avatar 且提供了 avatar_id，生成视频
+            video_response = None
+            if settings.enable_avatar and avatar_id:
+                logger.info(f"Generating video for avatar_id={avatar_id}")
+                video_response = await ai_engine.generate_video(
+                    audio_data=audio_response,
+                    avatar_id=avatar_id,
+                    fps=25
+                )
+
+            # 构建响应消息
+            response_message = {
+                "type": "video" if video_response else "audio",
                 "content": response,
+                "audio": audio_response,  # base64 编码的音频
                 "role": "assistant",
                 "timestamp": datetime.now().isoformat()
-            })
+            }
+
+            # 如果有视频，添加视频数据
+            if video_response:
+                response_message["video"] = video_response  # base64 编码的视频
+                logger.info(f"Sending video response: video_size={len(video_response)} bytes")
+            else:
+                logger.info("Sending audio-only response")
+
+            # 发送响应
+            logger.info(f"About to send response: type={response_message['type']}")
+            await send_message(websocket, response_message)
+            logger.info("Response sent successfully")
 
         elif msg_type == "audio":
             # 处理音频消息
             audio_data = message.get("data", "")
+            avatar_id = message.get("avatar_id")  # 可选的 avatar_id
+
+            logger.info(f"Audio message received: avatar_id={avatar_id}, enable_avatar={settings.enable_avatar}")
 
             # ASR: 音频转文本
             transcription = await ai_engine.process_audio(audio_data)
@@ -188,14 +220,31 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
             # TTS: 文本转语音
             audio_response = await ai_engine.synthesize_speech(response)
 
-            # 发送音频响应
-            await send_message(websocket, {
-                "type": "audio",
+            # 如果启用了 Avatar 且提供了 avatar_id，生成视频
+            video_response = None
+            if settings.enable_avatar and avatar_id:
+                logger.info(f"Generating video for avatar_id={avatar_id}")
+                video_response = await ai_engine.generate_video(
+                    audio_data=audio_response,
+                    avatar_id=avatar_id,
+                    fps=25
+                )
+
+            # 构建响应消息
+            response_message = {
+                "type": "video" if video_response else "audio",
                 "content": response,
-                "data": audio_response,  # base64 编码的音频
+                "audio": audio_response,  # base64 编码的音频
                 "role": "assistant",
                 "timestamp": datetime.now().isoformat()
-            })
+            }
+
+            # 如果有视频，添加视频数据
+            if video_response:
+                response_message["video"] = video_response  # base64 编码的视频
+
+            # 发送响应
+            await send_message(websocket, response_message)
 
         else:
             await send_error(websocket, f"Unsupported message type: {msg_type}")

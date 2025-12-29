@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     # MuseTalk / Avatar 配置
     # 是否启用 MuseTalk（如果为 False，则使用 Mock 模式）
-    enable_avatar: bool = False  # 也兼容 enable_musetalk
+    enable_avatar: bool = True  # 也兼容 enable_musetalk
     # Avatar 存储目录
     avatars_dir: str = "/workspace/gpuserver/data/avatars"
     # MuseTalk 基础目录

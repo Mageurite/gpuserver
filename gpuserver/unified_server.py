@@ -9,8 +9,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
-from management_api import app as management_app
-from websocket_server import app as websocket_app
+from api.management_api import app as management_app
+from api.websocket_server import app as websocket_app
 
 # 创建主应用
 main_app = FastAPI(
