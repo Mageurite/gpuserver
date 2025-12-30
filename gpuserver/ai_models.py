@@ -79,7 +79,8 @@ class AIEngine:
         self,
         text: str,
         tutor_id: int,
-        kb_id: Optional[str] = None
+        kb_id: Optional[str] = None,
+        session_id: Optional[str] = None
     ) -> str:
         """
         处理文本输入，生成 AI 响应
@@ -88,6 +89,7 @@ class AIEngine:
             text: 用户输入的文本
             tutor_id: 导师 ID（用于验证，应该与实例的 tutor_id 一致）
             kb_id: 知识库 ID（可选，用于 RAG，当前版本暂未实现 RAG 检索）
+            session_id: 会话 ID（可选，用于区分不同的聊天历史）
 
         Returns:
             str: AI 生成的响应文本
@@ -95,8 +97,8 @@ class AIEngine:
         # 验证 tutor_id 是否匹配
         if tutor_id != self.tutor_id:
             logger.warning(f"tutor_id mismatch: instance={self.tutor_id}, request={tutor_id}")
-        
-        logger.info(f"Processing text: tutor_id={tutor_id}, kb_id={kb_id}, text={text[:50]}...")
+
+        logger.info(f"Processing text: tutor_id={tutor_id}, kb_id={kb_id}, session_id={session_id}, text={text[:50]}...")
 
         # RAG 检索：如果 kb_id 存在，先进行知识库检索
         context = None

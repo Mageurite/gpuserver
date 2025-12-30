@@ -58,6 +58,10 @@ class AvatarManager:
         self.conda_env = conda_env
         self.ffmpeg_path = ffmpeg_path or "ffmpeg"
 
+        # 视频缓存：{(avatar_id, duration, fps): base64_video_data}
+        # 参考 try/lip-sync 的实现，缓存生成的视频以避免重复生成
+        self._idle_video_cache: Dict[tuple, str] = {}
+
         # 确保目录存在
         os.makedirs(self.avatars_dir, exist_ok=True)
 
@@ -872,6 +876,7 @@ class AvatarManager:
         同步生成待机视频（在线程池中运行）
 
         从 avatar 的图片帧生成一个循环的待机视频
+        参考 try/lip-sync 的实现，使用缓存机制避免重复生成
 
         Args:
             avatar_id: Avatar ID
@@ -884,6 +889,12 @@ class AvatarManager:
         import base64
         import tempfile
         import glob
+
+        # 检查缓存
+        cache_key = (avatar_id, duration, fps)
+        if cache_key in self._idle_video_cache:
+            logger.info(f"Returning cached idle video for {avatar_id} (duration={duration}s, fps={fps})")
+            return self._idle_video_cache[cache_key]
 
         try:
             # 1. 查找 avatar 的图片帧
@@ -966,7 +977,9 @@ class AvatarManager:
             except Exception as e:
                 logger.warning(f"Failed to clean up temp files: {e}")
 
-            logger.info(f"Idle video generated successfully: {len(video_data)} bytes")
+            # 9. 存入缓存（参考 try/lip-sync 的缓存策略）
+            self._idle_video_cache[cache_key] = video_data
+            logger.info(f"Idle video generated successfully: {len(video_data)} bytes (cached)")
             return video_data
 
         except Exception as e:

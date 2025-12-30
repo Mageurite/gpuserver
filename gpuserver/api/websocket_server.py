@@ -92,7 +92,7 @@ async def health_check():
 async def websocket_endpoint(
     websocket: WebSocket,
     connection_id: str,
-    token: str = Query(..., description="engine_token for authentication")
+    token: Optional[str] = Query(None, description="engine_token or auth_token for authentication (optional)")
 ):
     """
     WebSocket 实时对话接口
@@ -105,20 +105,31 @@ async def websocket_endpoint(
     连接模式:
         1. 新模式（基于 user_id）: connection_id = "user_{user_id}"
            - 同一个 user_id 的所有 session 共享一个 WebSocket 连接
-           - 消息必须包含 engine_session_id 用于路由到正确的 session
+           - 支持两种子模式：
+             a) 有 session 模式：提供 token，可以使用 engine_session_id 路由
+             b) 无 session 模式：不提供 token，每条消息必须包含 tutor_id
 
         2. 旧模式（基于 session_id）: connection_id = "{session_id}"
            - 每个 session 独立的 WebSocket 连接（向后兼容）
+           - 必须提供 token
 
     消息格式:
         客户端 -> 服务器:
             {
                 "type": "text_webrtc" | "text" | "audio" | "webrtc_offer" | "webrtc_ice_candidate",
                 "content": "用户输入的文本",
-                "engine_session_id": "uuid-here",  # 新模式必需，用于路由到正确的 session
+                "tutor_id": 1,  # 必需，用于选择 Avatar 视频
+                "session_id": 59,  # 可选，用于区分聊天历史
+                "engine_session_id": "uuid-here",  # 有 session 模式可选
                 "user_id": 123,  # WebRTC 相关消息必需
-                "avatar_id": "avatar_tutor_13"  # 可选
+                "avatar_id": "avatar_tutor_13",  # 可选
+                "kb_id": "knowledge_base_id"  # 可选
             }
+
+        说明：
+            - tutor_id: 控制使用哪个 Avatar 视频（同一个 tutor 的所有学生共享同一个 Avatar）
+            - session_id: 控制聊天历史存储位置（同一个学生可以有多个 session）
+            - 视频按 tutor_id 区分，聊天记录按 session_id 区分
 
         服务器 -> 客户端:
             {
@@ -136,28 +147,26 @@ async def websocket_endpoint(
     if is_user_based:
         # 新模式：基于 user_id
         user_id = connection_id.replace("user_", "")
-        logger.info(f"User-based connection mode: user_id={user_id}")
+        logger.info(f"User-based connection mode: user_id={user_id}, token_provided={token is not None}")
 
-        # 对于 user-based 模式，我们需要验证 token 但不需要匹配特定的 session_id
-        # 因为同一个用户可能有多个 session
-        verified_session_id = manager.verify_token(token)
-        if not verified_session_id:
-            logger.warning(f"Invalid token for user {user_id}")
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            return
+        # Session 是可选的
+        session = None
 
-        # 获取第一个 session 的信息（用于获取 tutor_id 等基本信息）
-        # 注意：在 user-based 模式下，实际的 session 信息会从消息中的 engine_session_id 获取
-        session = manager.get_session(verified_session_id)
-        if not session:
-            logger.warning(f"Session {verified_session_id} not found")
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            return
+        if token:
+            # 如果提供了 token，尝试验证并获取 session
+            verified_session_id = manager.verify_token(token)
+            if verified_session_id:
+                session = manager.get_session(verified_session_id)
+                logger.info(f"Token verified, using session: {verified_session_id}")
+            else:
+                logger.warning(f"Invalid token provided, will use sessionless mode")
+        else:
+            logger.info(f"No token provided, using sessionless mode")
 
-        # 接受连接
+        # 接受连接（无论是否有 session）
         await websocket.accept()
         active_connections[connection_id] = websocket
-        logger.info(f"WebSocket connected (user-based): connection_id={connection_id}, user_id={user_id}")
+        logger.info(f"WebSocket connected (user-based): connection_id={connection_id}, user_id={user_id}, has_session={session is not None}")
 
     else:
         # 旧模式：基于 session_id（向后兼容）
@@ -184,11 +193,15 @@ async def websocket_endpoint(
         logger.info(f"WebSocket connected (session-based): session_id={session_id}, tutor_id={session.tutor_id}")
 
     # 获取 AI 引擎（按 tutor_id 隔离）
-    ai_engine = get_ai_engine(session.tutor_id)
+    # 在 user-based 无 session 模式下，ai_engine 会在第一条消息时创建
+    ai_engine = None
+    if session:
+        ai_engine = get_ai_engine(session.tutor_id)
+        logger.info(f"AI engine initialized for tutor_id={session.tutor_id}")
 
     # 自动发送待机视频（如果启用了 Avatar）
     # 注意：在 user-based 模式下，可能需要等待第一条消息来确定 avatar_id
-    if settings.enable_avatar and not is_user_based:
+    if settings.enable_avatar and not is_user_based and session:
         # 只在 session-based 模式下自动发送待机视频
         avatar_id = f"avatar_tutor_{session.tutor_id}"
         logger.info(f"Auto-sending idle video for avatar_id={avatar_id}")
@@ -213,7 +226,7 @@ async def websocket_endpoint(
                 logger.warning("Failed to get idle video, skipping auto-send")
         except Exception as e:
             logger.error(f"Error auto-sending idle video: {e}", exc_info=True)
-    elif not is_user_based:
+    elif not is_user_based and session:
         # 如果没有启用 Avatar，发送欢迎消息（仅 session-based 模式）
         await send_message(websocket, {
             "type": "text",
@@ -229,42 +242,52 @@ async def websocket_endpoint(
             data = await websocket.receive_text()
             message = json.loads(data)
 
-            # 在 user-based 模式下，从消息中获取 engine_session_id
+            # 在 user-based 模式下，从消息中获取 engine_session_id（可选）
             if is_user_based:
-                engine_session_id = message.get("engine_session_id")
-                if not engine_session_id and message.get("type") not in ["webrtc_offer", "webrtc_ice_candidate"]:
-                    # WebRTC 相关消息不需要 engine_session_id
-                    await send_error(websocket, "engine_session_id is required in user-based mode")
-                    continue
-
-                # 获取或创建 session 上下文
-                if engine_session_id and engine_session_id not in session_contexts:
-                    # 验证 engine_session_id 是否有效
-                    target_session = manager.get_session(engine_session_id)
-                    if not target_session:
-                        await send_error(websocket, f"Invalid engine_session_id: {engine_session_id}")
+                # 无 session 模式：从消息中获取 tutor_id
+                if not session:
+                    tutor_id = message.get("tutor_id")
+                    if not tutor_id:
+                        await send_error(websocket, "tutor_id is required in sessionless mode")
                         continue
 
-                    # 创建 session 上下文
-                    session_contexts[engine_session_id] = {
-                        "session": target_session,
-                        "ai_engine": get_ai_engine(target_session.tutor_id)
-                    }
-                    logger.info(f"Created session context for engine_session_id={engine_session_id}")
+                    # 动态创建 AI 引擎
+                    if not ai_engine:
+                        ai_engine = get_ai_engine(tutor_id)
+                        logger.info(f"AI engine created dynamically for tutor_id={tutor_id}")
 
-                # 更新会话活动时间
-                if engine_session_id:
+                    # 直接处理消息（无 session）
+                    await handle_message(websocket, None, message, ai_engine, is_user_based)
+                else:
+                    # 有 session 模式
+                    engine_session_id = message.get("engine_session_id")
+
+                    # 如果没有提供 engine_session_id，使用默认的 session（连接时验证的那个）
+                    if not engine_session_id:
+                        engine_session_id = session.session_id
+                        logger.info(f"No engine_session_id provided, using default session: {engine_session_id}")
+
+                    # 获取或创建 session 上下文
+                    if engine_session_id not in session_contexts:
+                        # 验证 engine_session_id 是否有效
+                        target_session = manager.get_session(engine_session_id)
+                        if not target_session:
+                            await send_error(websocket, f"Invalid engine_session_id: {engine_session_id}")
+                            continue
+
+                        # 创建 session 上下文
+                        session_contexts[engine_session_id] = {
+                            "session": target_session,
+                            "ai_engine": get_ai_engine(target_session.tutor_id)
+                        }
+                        logger.info(f"Created session context for engine_session_id={engine_session_id}")
+
+                    # 更新会话活动时间
                     manager.update_activity(engine_session_id)
 
-                # 处理消息（使用 engine_session_id 对应的 session）
-                if engine_session_id and engine_session_id in session_contexts:
+                    # 处理消息（使用 engine_session_id 对应的 session）
                     ctx = session_contexts[engine_session_id]
                     await handle_message(websocket, ctx["session"], message, ctx["ai_engine"], is_user_based)
-                elif message.get("type") in ["webrtc_offer", "webrtc_ice_candidate"]:
-                    # WebRTC 相关消息不需要 session 上下文
-                    await handle_message(websocket, session, message, ai_engine, is_user_based)
-                else:
-                    await send_error(websocket, f"Session context not found: {engine_session_id}")
 
             else:
                 # 旧模式：使用 connection_id 作为 session_id
@@ -299,7 +322,7 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
 
     Args:
         websocket: WebSocket 连接
-        session: 会话对象
+        session: 会话对象（可以为 None，在 sessionless 模式下）
         message: 客户端消息
         ai_engine: AI 引擎实例
         is_user_based: 是否为 user-based 模式
@@ -307,7 +330,8 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
     msg_type = message.get("type")
     content = message.get("content", "")
 
-    logger.info(f"Received message: session_id={session.session_id}, type={msg_type}")
+    session_id = session.session_id if session else "sessionless"
+    logger.info(f"Received message: session_id={session_id}, type={msg_type}")
 
     try:
         if msg_type == "init":
@@ -365,7 +389,8 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
 
             # 在 user-based 模式下，engine_session_id 应该已经在外层处理
             # 这里记录日志以便调试
-            logger.info(f"Processing text with WebRTC streaming: avatar_id={avatar_id}, user_id={user_id}, engine_session_id={engine_session_id}, session_id={session.session_id}")
+            session_id_log = session.session_id if session else "sessionless"
+            logger.info(f"Processing text with WebRTC streaming: avatar_id={avatar_id}, user_id={user_id}, engine_session_id={engine_session_id}, session_id={session_id_log}")
 
             # 使用 WebRTC 流式传输（使用 user_id，同一用户共享）
             response_text, audio_data = await ai_engine.stream_video_webrtc(
@@ -390,11 +415,17 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
             # 处理文本消息 - 流式响应模式（立即发送文本和音频）
             avatar_id = message.get("avatar_id")  # 可选的 avatar_id
 
+            # 获取 tutor_id、kb_id 和 session_id（从 session 或消息中）
+            tutor_id = session.tutor_id if session else message.get("tutor_id")
+            kb_id = session.kb_id if session else message.get("kb_id")
+            session_id_for_chat = message.get("session_id")  # 用于区分聊天历史
+
             # 1. LLM: 生成响应
             response = await ai_engine.process_text(
                 text=content,
-                tutor_id=session.tutor_id,
-                kb_id=session.kb_id
+                tutor_id=tutor_id,
+                kb_id=kb_id,
+                session_id=session_id_for_chat  # 传递 session_id 用于聊天历史
             )
 
             # 2. 立即发送文本响应
@@ -467,10 +498,15 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
             })
 
             # LLM: 生成响应
+            tutor_id = session.tutor_id if session else message.get("tutor_id")
+            kb_id = session.kb_id if session else message.get("kb_id")
+            session_id_for_chat = message.get("session_id")  # 用于区分聊天历史
+
             response = await ai_engine.process_text(
                 text=transcription,
-                tutor_id=session.tutor_id,
-                kb_id=session.kb_id
+                tutor_id=tutor_id,
+                kb_id=kb_id,
+                session_id=session_id_for_chat  # 传递 session_id 用于聊天历史
             )
 
             # TTS: 文本转语音
@@ -516,7 +552,8 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
                 await send_error(websocket, "user_id is required for WebRTC")
                 return
 
-            logger.info(f"Received WebRTC offer from session {session.session_id}, user_id={user_id}")
+            session_id_log = session.session_id if session else "sessionless"
+            logger.info(f"Received WebRTC offer from session {session_id_log}, user_id={user_id}")
 
             # 获取 WebRTC streamer
             webrtc_streamer = get_webrtc_streamer()
@@ -553,7 +590,8 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
                 await send_error(websocket, "user_id is required for WebRTC")
                 return
 
-            logger.info(f"Received ICE candidate from session {session.session_id}, user_id={user_id}")
+            session_id_log = session.session_id if session else "sessionless"
+            logger.info(f"Received ICE candidate from session {session_id_log}, user_id={user_id}")
 
             # 获取 WebRTC streamer
             webrtc_streamer = get_webrtc_streamer()
