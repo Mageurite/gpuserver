@@ -1,0 +1,17 @@
+[Unit]
+Description=SSH Reverse Tunnel for GPU Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/workspace/gpuserver
+ExecStart=/workspace/gpuserver/start_tunnel.sh
+ExecStop=/workspace/gpuserver/stop_tunnel.sh
+Restart=always
+RestartSec=10
+StandardOutput=append:/workspace/gpuserver/logs/ssh_tunnel.log
+StandardError=append:/workspace/gpuserver/logs/ssh_tunnel.log
+
+[Install]
+WantedBy=multi-user.target

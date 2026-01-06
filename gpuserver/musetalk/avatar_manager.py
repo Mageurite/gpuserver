@@ -307,15 +307,36 @@ class AvatarManager:
                 env['PATH'] = f"{self.conda_env}/bin:{env.get('PATH', '')}"
                 env['CONDA_PREFIX'] = self.conda_env
                 env['CONDA_DEFAULT_ENV'] = os.path.basename(self.conda_env)
-                # 也设置 PYTHONPATH，确保能找到 conda 环境的包
-                python_site = f"{self.conda_env}/lib/python3.10/site-packages"
-                if os.path.exists(python_site):
-                    env['PYTHONPATH'] = f"{python_site}:{env.get('PYTHONPATH', '')}"
+                # 动态查找 Python 版本目录
+                python_lib_dir = os.path.join(self.conda_env, "lib")
+                if os.path.exists(python_lib_dir):
+                    for item in os.listdir(python_lib_dir):
+                        if item.startswith("python3."):
+                            python_site = os.path.join(python_lib_dir, item, "site-packages")
+                            if os.path.exists(python_site):
+                                env['PYTHONPATH'] = f"{python_site}:{env.get('PYTHONPATH', '')}"
+                                break
                 logger.info(f"Using conda environment: {self.conda_env}")
                 logger.info(f"PATH: {env['PATH'][:200]}...")
 
-            # 构建命令 - 直接运行 bash 脚本，不要嵌套
-            command = ["bash", script_path, "v1.5", "realtime"]
+            # 使用 conda 环境的 python 直接运行，不通过 inference.sh
+            # 这样可以避免 inference.sh 中的 python3 找到系统 Python
+            if self.conda_env:
+                python_bin = os.path.join(self.conda_env, "bin", "python")
+            else:
+                python_bin = "python3"
+            
+            # 直接调用 Python 模块，而不是通过 bash 脚本
+            # 使用 realtime.yaml 配置，会自动在 results/v15/avatars/ 下创建 avatar
+            # -u 参数禁用输出缓冲，确保能实时看到日志
+            command = [
+                python_bin, "-u", "-m", "scripts.realtime_inference",
+                "--inference_config", "./configs/inference/realtime.yaml",
+                "--unet_model_path", "./models/musetalkV15/unet.pth",
+                "--unet_config", "./models/musetalkV15/musetalk.json",
+                "--version", "v15",
+                "--fps", "25"
+            ]
 
             logger.info(f"Running MuseTalk inference: {' '.join(command)}")
 
@@ -331,18 +352,78 @@ class AvatarManager:
                 cwd=self.musetalk_base  # 设置工作目录为 MuseTalk 基础目录
             )
 
-            # 实时打印输出
-            for line in process.stdout:
-                logger.info(f"[MuseTalk] {line.rstrip()}")
+            # 使用轮询方式检测 latents.pt 文件生成，而不是依赖stdout
+            # 因为stdout在subprocess中可能有缓冲问题
+            import time
+            import threading
+            
+            result_dir = os.path.join(self.musetalk_base, "results", "v15", "avatars", "avator_1")
+            latents_file = os.path.join(result_dir, "latents.pt")
+            
+            preparation_completed = False
+            check_count = 0
+            max_checks = 180  # 最多检查3分钟 (180 * 1秒)
+            
+            # 在后台读取并记录输出，避免管道阻塞
+            def read_output():
+                try:
+                    for line in process.stdout:
+                        logger.info(f"[MuseTalk] {line.rstrip()}")
+                except:
+                    pass
+            
+            output_thread = threading.Thread(target=read_output, daemon=True)
+            output_thread.start()
+            
+            logger.info("Monitoring avatar preparation progress...")
+            
+            try:
+                # 轮询检查 latents.pt 是否生成
+                while check_count < max_checks:
+                    if os.path.exists(latents_file):
+                        # 文件存在，再等待2秒确保写入完成
+                        time.sleep(2)
+                        file_size = os.path.getsize(latents_file)
+                        if file_size > 1000000:  # 文件大于1MB，说明已完成
+                            preparation_completed = True
+                            logger.info(f"Avatar preparation completed! latents.pt size: {file_size} bytes")
+                            logger.info("Terminating inference process...")
+                            process.terminate()
+                            try:
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                                process.wait()
+                            break
+                    
+                    time.sleep(1)
+                    check_count += 1
+                    
+                    # 每10秒记录一次进度
+                    if check_count % 10 == 0:
+                        logger.info(f"Still preparing avatar... ({check_count}s elapsed)")
+                
+                # 如果超时，强制终止
+                if not preparation_completed:
+                    logger.warning("Preparation timeout, terminating process...")
+                    process.kill()
+                    process.wait()
+                    
+            except Exception as e:
+                logger.error(f"Error during avatar preparation: {e}")
+                try:
+                    process.kill()
+                    process.wait()
+                except:
+                    pass
 
-            # 等待进程完成
-            process.wait()
-
-            if process.returncode == 0:
-                logger.info("MuseTalk inference completed successfully")
+            # 检查结果是否存在，而不是依赖返回码
+            result_dir = os.path.join(self.musetalk_base, "results", "v15", "avatars", "avator_1")
+            if os.path.exists(result_dir) and os.path.exists(os.path.join(result_dir, "latents.pt")):
+                logger.info("MuseTalk avatar preparation completed successfully")
                 return True
             else:
-                logger.error(f"MuseTalk inference failed with code: {process.returncode}")
+                logger.error(f"MuseTalk inference failed - result not found at {result_dir}")
                 return False
 
         except Exception as e:

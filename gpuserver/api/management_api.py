@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, status, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import uvicorn
@@ -45,6 +46,15 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# 配置 CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 允许所有来源，生产环境应该配置具体域名
+    allow_credentials=True,
+    allow_methods=["*"],  # 允许所有HTTP方法
+    allow_headers=["*"],  # 允许所有请求头
+)
+
 
 @app.get("/health")
 async def health_check():
@@ -66,6 +76,7 @@ async def health_check():
 
 
 @app.post("/v1/sessions", response_model=CreateSessionResponse, status_code=status.HTTP_201_CREATED)
+@app.post("/mgmt/v1/sessions", response_model=CreateSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_session(request: CreateSessionRequest):
     """
     创建新会话
@@ -213,6 +224,7 @@ class AvatarResponse(BaseModel):
 
 
 @app.post("/v1/avatars", response_model=AvatarResponse, status_code=status.HTTP_201_CREATED)
+@app.post("/mgmt/v1/avatars", response_model=AvatarResponse, status_code=status.HTTP_201_CREATED)
 async def create_avatar_from_path(request: CreateAvatarRequest):
     """
     从视频路径创建 Avatar（教师端使用）
@@ -257,6 +269,7 @@ async def create_avatar_from_path(request: CreateAvatarRequest):
 
 
 @app.post("/v1/avatars/upload", response_model=AvatarResponse, status_code=status.HTTP_201_CREATED)
+@app.post("/mgmt/v1/avatars/upload", response_model=AvatarResponse, status_code=status.HTTP_201_CREATED)
 async def create_avatar_from_upload(
     avatar_id: str = Form(...),
     apply_blur: bool = Form(False),

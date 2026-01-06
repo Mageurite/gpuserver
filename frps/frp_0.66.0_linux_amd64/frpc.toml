@@ -1,0 +1,94 @@
+
+serverAddr = "51.161.209.200"  
+serverPort = 7504       
+
+# ----- GPU Server API (本地9000 -> 公网10110) -----
+[[proxies]]
+name = "gpu_server_api"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 9000
+remotePort = 10110
+
+# ----- TURN Server (UDP for WebRTC) -----
+[[proxies]]
+name = "turn_server"
+type = "udp"
+localIP = "127.0.0.1"
+localPort = 10110
+remotePort = 10110
+
+# ----- Port 10111 (备用) -----
+[[proxies]]
+name = "tcp_10111"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 10111
+remotePort = 10111
+
+[[proxies]]
+name = "udp_10111"
+type = "udp"
+localIP = "127.0.0.1"
+localPort = 10111
+remotePort = 10111
+
+# ----- Port 10112 -----
+[[proxies]]
+name = "tcp_10112"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 10112
+remotePort = 10112
+
+[[proxies]]
+name = "udp_10112"
+type = "udp"
+localIP = "127.0.0.1"
+localPort = 10112
+remotePort = 10112
+
+# ----- Port 10113 -----
+[[proxies]]
+name = "tcp_10113"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 10113
+remotePort = 10113
+
+[[proxies]]
+name = "udp_10113"
+type = "udp"
+localIP = "127.0.0.1"
+localPort = 10113
+remotePort = 10113
+
+# ----- Port 10114 -----
+[[proxies]]
+name = "tcp_10114"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 10114
+remotePort = 10114
+
+[[proxies]]
+name = "udp_10114"
+type = "udp"
+localIP = "127.0.0.1"
+localPort = 10114
+remotePort = 10114
+
+# ----- Port 10115 -----
+[[proxies]]
+name = "tcp_10115"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 10115
+remotePort = 10115
+
+[[proxies]]
+name = "udp_10115"
+type = "udp"
+localIP = "127.0.0.1"
+localPort = 10115
+remotePort = 10115
