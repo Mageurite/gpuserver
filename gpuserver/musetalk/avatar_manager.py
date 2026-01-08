@@ -798,8 +798,14 @@ class AvatarManager:
                 env['CONDA_PREFIX'] = self.conda_env
                 env['CONDA_DEFAULT_ENV'] = os.path.basename(self.conda_env)
                 python_site = f"{self.conda_env}/lib/python3.10/site-packages"
+
+                # 关键: 添加 MuseTalk 基础目录到 PYTHONPATH
+                pythonpath_parts = [self.musetalk_base]
                 if os.path.exists(python_site):
-                    env['PYTHONPATH'] = f"{python_site}:{env.get('PYTHONPATH', '')}"
+                    pythonpath_parts.append(python_site)
+                if env.get('PYTHONPATH'):
+                    pythonpath_parts.append(env['PYTHONPATH'])
+                env['PYTHONPATH'] = ':'.join(pythonpath_parts)
 
             # 构建命令
             python_exe = f"{self.conda_env}/bin/python" if self.conda_env else "python"
@@ -1086,7 +1092,12 @@ class AvatarManager:
         """
         实时生成视频帧流（用于 WebRTC）
 
-        逐帧生成视频，每生成一帧就 yield 出去，实现实时流式传输
+        使用子进程方式生成视频，然后逐帧读取并推流
+
+        策略:
+        1. 使用子进程调用 MuseTalk (mt 环境) 生成视频
+        2. 使用 cv2 读取生成的视频
+        3. 逐帧 yield 给 WebRTC
 
         Args:
             audio_data: base64 编码的音频数据
@@ -1103,39 +1114,58 @@ class AvatarManager:
             return
 
         try:
-            # 在线程池中运行同步的帧生成过程
-            loop = asyncio.get_event_loop()
+            # 先生成完整视频（使用子进程）
+            logger.info(f"Generating video for WebRTC streaming: avatar_id={avatar_id}")
+            video_data = await self.generate_video(
+                audio_data=audio_data,
+                avatar_id=avatar_id,
+                fps=fps
+            )
 
-            # 使用队列在线程和协程之间传递帧
-            frame_queue = asyncio.Queue(maxsize=30)
+            if not video_data:
+                logger.error("Failed to generate video for streaming")
+                return
 
-            # 在线程池中运行帧生成
-            async def generate_frames():
-                await loop.run_in_executor(
-                    None,
-                    self._generate_frames_sync,
-                    audio_data,
-                    avatar_id,
-                    fps,
-                    frame_queue
-                )
+            # 将 base64 视频解码并保存到临时文件
+            import base64
+            import tempfile
+            import cv2
 
-            # 启动生成任务
-            generate_task = asyncio.create_task(generate_frames())
+            video_bytes = base64.b64decode(video_data)
 
-            # 逐帧 yield
-            while True:
-                try:
-                    frame = await asyncio.wait_for(frame_queue.get(), timeout=5.0)
-                    if frame is None:  # 结束信号
+            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp_file:
+                tmp_file.write(video_bytes)
+                video_path = tmp_file.name
+
+            try:
+                # 使用 cv2 读取视频并逐帧 yield
+                cap = cv2.VideoCapture(video_path)
+
+                if not cap.isOpened():
+                    logger.error(f"Failed to open video: {video_path}")
+                    return
+
+                frame_count = 0
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
                         break
-                    yield frame
-                except asyncio.TimeoutError:
-                    logger.warning("Frame generation timeout")
-                    break
 
-            # 等待生成任务完成
-            await generate_task
+                    yield frame
+                    frame_count += 1
+
+                    # 控制帧率
+                    await asyncio.sleep(1.0 / fps)
+
+                cap.release()
+                logger.info(f"Streamed {frame_count} frames via WebRTC")
+
+            finally:
+                # 清理临时文件
+                try:
+                    os.unlink(video_path)
+                except:
+                    pass
 
         except Exception as e:
             logger.error(f"Frame streaming failed: {e}", exc_info=True)
@@ -1145,7 +1175,8 @@ class AvatarManager:
         audio_data: str,
         avatar_id: str,
         fps: int,
-        frame_queue: asyncio.Queue
+        frame_queue: asyncio.Queue,
+        loop  # 接收 event loop 参数
     ):
         """
         同步生成视频帧（在线程池中运行）
@@ -1264,7 +1295,7 @@ class AvatarManager:
                     # 放入队列
                     asyncio.run_coroutine_threadsafe(
                         frame_queue.put(frame),
-                        asyncio.get_event_loop()
+                        loop  # 使用传入的 loop
                     )
 
                     if i % 25 == 0:  # 每秒日志一次
@@ -1273,7 +1304,7 @@ class AvatarManager:
                 # 发送结束信号
                 asyncio.run_coroutine_threadsafe(
                     frame_queue.put(None),
-                    asyncio.get_event_loop()
+                    loop  # 使用传入的 loop
                 )
 
                 logger.info(f"Frame generation completed: {len(whisper_chunks)} frames")
@@ -1283,7 +1314,7 @@ class AvatarManager:
                 # 发送结束信号
                 asyncio.run_coroutine_threadsafe(
                     frame_queue.put(None),
-                    asyncio.get_event_loop()
+                    loop  # 使用传入的 loop
                 )
 
             # 清理临时文件
@@ -1297,7 +1328,7 @@ class AvatarManager:
             # 发送结束信号
             asyncio.run_coroutine_threadsafe(
                 frame_queue.put(None),
-                asyncio.get_event_loop()
+                loop  # 使用传入的 loop
             )
 
     async def _mock_generate_frames_stream(

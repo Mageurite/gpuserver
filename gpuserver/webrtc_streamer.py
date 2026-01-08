@@ -174,23 +174,13 @@ class WebRTCStreamer:
         # 获取WebRTC配置
         config = get_webrtc_config()
 
-        # 配置ICE服务器（STUN + TURN）
+        # 使用 Google STUN 服务器进行 NAT 穿透
         ice_servers = [
-            # STUN服务器用于NAT穿透
-            RTCIceServer(urls=[config['stun_server']]),
-            # TURN服务器用于中继（当P2P失败时）
-            RTCIceServer(
-                urls=[config['turn_server']],
-                username=config['turn_username'],
-                credential=config['turn_password']
-            )
+            RTCIceServer(urls=["stun:stun.l.google.com:19302"])
         ]
         configuration = RTCConfiguration(iceServers=ice_servers)
-
-        logger.info(f"Using STUN + TURN servers for NAT traversal")
-        logger.info(f"  STUN: {config['stun_server']}")
-        logger.info(f"  TURN: {config['turn_server']}")
-        logger.info(f"  TURN username: {config['turn_username']}")
+        
+        logger.info(f"Using STUN server for NAT traversal (P2P mode)")
         pc = RTCPeerConnection(configuration=configuration)
         self.connections[session_id] = pc
 
@@ -216,6 +206,10 @@ class WebRTCStreamer:
             logger.info(f"ICE gathering state: {pc.iceGatheringState}")
 
         logger.info(f"WebRTC peer connection created for session {session_id}")
+        logger.info(f"  STUN server: {config['stun_server']}")
+        logger.info(f"  TURN server: {config.get('turn_server', 'NOT CONFIGURED')}")
+        logger.info(f"  TURN username: {config.get('turn_username', 'NOT CONFIGURED')}")
+        logger.info(f"  ICE servers count: {len(ice_servers)}")
         return pc
 
     async def _send_ice_candidates_from_sdp(self, sdp: str, session_id: str, websocket):
