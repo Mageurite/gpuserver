@@ -1,0 +1,13 @@
+<component name="libraryTable">
+  <library name="modules33">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/clouds-docker-impl/lib/modules/intellij.clouds.docker.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/clouds-docker-impl/lib/modules/intellij.clouds.docker.file.backend.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/clouds-docker-impl/lib/modules/intellij.clouds.docker.frontend.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/clouds-docker-impl/lib/modules/intellij.clouds.docker.shared.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/clouds-docker-impl/lib/modules/intellij.clouds.docker.file.frontend.split.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

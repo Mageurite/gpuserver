@@ -1,0 +1,11 @@
+<component name="libraryTable">
+  <library name="modules80">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/yaml/lib/modules/intellij.yaml.frontend.split.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/yaml/lib/modules/intellij.yaml.helm.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/yaml/lib/modules/intellij.yaml.backend.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

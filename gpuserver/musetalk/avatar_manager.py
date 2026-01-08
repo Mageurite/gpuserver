@@ -979,12 +979,20 @@ class AvatarManager:
 
         try:
             # 1. 查找 avatar 的图片帧
-            avatar_path = os.path.join(self.musetalk_base, "results", "v15", "avatars", avatar_id)
+            # 首先尝试从 avatars_dir 查找（主存储位置）
+            avatar_path = os.path.join(self.avatars_dir, avatar_id)
             full_imgs_dir = os.path.join(avatar_path, "full_imgs")
 
+            # 如果不存在，尝试从 musetalk_base 查找（临时结果位置）
             if not os.path.exists(full_imgs_dir):
-                logger.error(f"Avatar images not found: {full_imgs_dir}")
+                avatar_path = os.path.join(self.musetalk_base, "results", "v15", "avatars", avatar_id)
+                full_imgs_dir = os.path.join(avatar_path, "full_imgs")
+                
+            if not os.path.exists(full_imgs_dir):
+                logger.error(f"Avatar images not found in either {self.avatars_dir}/{avatar_id} or {self.musetalk_base}/results/v15/avatars/{avatar_id}")
                 return None
+            
+            logger.info(f"Using avatar images from: {full_imgs_dir}")
 
             # 2. 获取所有图片帧
             images = sorted(glob.glob(os.path.join(full_imgs_dir, "*.png")))

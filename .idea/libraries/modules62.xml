@@ -1,0 +1,16 @@
+<component name="libraryTable">
+  <library name="modules62">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/code-provenance/lib/modules/intellij.code.provenance.core.git.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/code-provenance/lib/modules/intellij.code.provenance.core.llm.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/code-provenance/lib/modules/intellij.code.provenance.core.fus.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/code-provenance/lib/modules/intellij.code.provenance.dev.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/code-provenance/lib/modules/intellij.code.provenance.core.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/code-provenance/lib/modules/intellij.code.provenance.core.mcp.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/code-provenance/lib/modules/intellij.code.provenance.ui.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/code-provenance/lib/modules/intellij.code.provenance.core.claude.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

@@ -1,0 +1,15 @@
+<component name="libraryTable">
+  <library name="frontend-split">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/cwm-plugin/lib/frontend-split/rd-client.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/cwm-plugin/lib/frontend-split/markdown-frontend-split.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/cwm-plugin/lib/frontend-split/frontend-split.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/cwm-plugin/lib/frontend-split/cwm-connection-frontend.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/cwm-plugin/lib/frontend-split/cwm-frontend.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/cwm-plugin/lib/frontend-split/driver-frontend-split.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/cwm-plugin/lib/frontend-split/performance-testing-frontend-split.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

@@ -1,0 +1,17 @@
+<component name="libraryTable">
+  <library name="modules10">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/javascript-debugger/lib/modules/intellij.javascript.debugger.webDeployment.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/javascript-debugger/lib/modules/intellij.javascript.debugger.webstorm.specific.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/javascript-debugger/lib/modules/intellij.javascript.debugger.coverage.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/javascript-debugger/lib/modules/intellij.javascript.debugger.backend.rpc.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/javascript-debugger/lib/modules/intellij.javascript.wip.backend.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/javascript-debugger/lib/modules/intellij.javascript.debugger.ui.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/javascript-debugger/lib/modules/intellij.javascript.debugger.backend.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/javascript-debugger/lib/modules/intellij.javascript.wip.protocol.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/javascript-debugger/lib/modules/intellij.javascript.reactNativeDebugger.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

@@ -1,0 +1,12 @@
+<component name="libraryTable">
+  <library name="modules75">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/editorconfig-plugin/lib/modules/intellij.editorconfig.backend.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/editorconfig-plugin/lib/modules/intellij.editorconfig.frontend.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/editorconfig-plugin/lib/modules/intellij.editorconfig.common.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/editorconfig-plugin/lib/modules/intellij.editorconfig.frontend.split.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="viewer2">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/conda_envs/avatar/lib/python3.1/site-packages/trimesh/resources/templates/viewer.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

@@ -1,0 +1,12 @@
+<component name="libraryTable">
+  <library name="lib29">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/java-coverage/lib/coverage-report.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/java-coverage/lib/java-coverage.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/java-coverage/lib/java-coverage-rt.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/java-coverage/lib/jacoco.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

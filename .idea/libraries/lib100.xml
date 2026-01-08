@@ -1,0 +1,17 @@
+<component name="libraryTable">
+  <library name="lib100">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/qodana/lib/qodana-sarif.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/qodana/lib/jetbrains.qodana.cloud.kotlin.client.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/qodana/lib/jetbrains.qodana.publisher.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/qodana/lib/flexmark.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/qodana/lib/jline.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/qodana/lib/jetbrains.qodana.configuration.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/qodana/lib/jetbrains.qodana.sarif.converter.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/qodana/lib/jetbrains.qodana.web.ui.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/qodana/lib/qodana.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

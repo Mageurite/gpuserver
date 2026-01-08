@@ -1,0 +1,12 @@
+<component name="libraryTable">
+  <library name="lib9">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/clouds-kubernetes/lib/semver4j.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/clouds-kubernetes/lib/kubernetes-client-java.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/clouds-kubernetes/lib/clouds-kubernetes.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/clouds-kubernetes/lib/intellij.kubernetes.k8s.api.spec.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

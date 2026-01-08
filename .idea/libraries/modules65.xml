@@ -1,0 +1,12 @@
+<component name="libraryTable">
+  <library name="modules65">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/editorconfig-plugin/lib/modules/intellij.editorconfig.frontend.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/editorconfig-plugin/lib/modules/intellij.editorconfig.backend.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/editorconfig-plugin/lib/modules/intellij.editorconfig.frontend.split.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/_workspace_root_backup_cache_backup_.cache_JetBrains_RemoteDev_dist_5db83dcb5c045_idea-2025.3.1/plugins/editorconfig-plugin/lib/modules/intellij.editorconfig.common.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

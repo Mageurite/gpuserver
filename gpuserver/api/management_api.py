@@ -410,6 +410,41 @@ async def list_avatars():
     }
 
 
+@app.get("/v1/webrtc/config")
+@app.get("/mgmt/v1/webrtc/config")
+@app.get("/api/webrtc/config")
+async def get_webrtc_config():
+    """
+    获取 WebRTC 配置信息
+    
+    前端需要这些配置来正确建立WebRTC连接
+    
+    Returns:
+        dict: WebRTC 配置，包括 ICE 服务器等
+    """
+    # 使用通过 FRP 映射的 TURN 服务器
+    # 前端通过 Web Server (51.161.130.234:10110) 访问 GPU Server 的 TURN 服务器
+    return {
+        "iceServers": [
+            {
+                "urls": ["stun:stun.l.google.com:19302"]
+            },
+            {
+                "urls": ["turn:51.161.209.200:10110"],  # GPU服务器的公网IP
+                "username": settings.webrtc_turn_username,
+                "credential": settings.webrtc_turn_password
+            }
+        ],
+        "iceTransportPolicy": "all",  # 使用all策略，允许所有类型的连接
+        "publicIp": settings.webrtc_public_ip,
+        "portRange": {
+            "min": settings.webrtc_port_min,
+            "max": settings.webrtc_port_max
+        },
+        "sdpSemantics": "unified-plan"
+    }
+
+
 def main():
     """启动管理 API 服务"""
     uvicorn.run(

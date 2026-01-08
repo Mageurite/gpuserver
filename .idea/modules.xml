@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/dist.iml" filepath="$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/dist.iml" />
+      <module fileurl="file://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/userProvidedDist.iml" filepath="$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/userProvidedDist/userProvidedDist.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/workspace.iml" filepath="$PROJECT_DIR$/.idea/workspace.iml" />
+    </modules>
+  </component>
+</project>

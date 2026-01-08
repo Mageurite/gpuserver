@@ -76,8 +76,10 @@ for file in "${REQUIRED_FILES[@]}"; do
 done
 print_success "所有必需文件存在"
 
-# 检查端口是否被占用
-PORT=19001
+# 从 .env 读取 WebSocket 端口
+PORT=$(grep WEBSOCKET_PORT .env | cut -d '=' -f2)
+PORT=${PORT:-9001}  # 如果未设置，默认使用 9001
+
 print_info "检查端口 $PORT 是否被占用..."
 if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
     print_warning "端口 $PORT 已被占用"

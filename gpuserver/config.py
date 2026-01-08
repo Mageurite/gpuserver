@@ -66,6 +66,22 @@ class Settings(BaseSettings):
     # FFmpeg 路径
     ffmpeg_path: str = "ffmpeg"
 
+    # WebRTC 配置
+    # 公网IP地址（用于WebRTC连接）
+    webrtc_public_ip: str = "51.161.209.200"
+    # WebRTC端口范围起始
+    webrtc_port_min: int = 10110
+    # WebRTC端口范围结束
+    webrtc_port_max: int = 10115
+    # STUN服务器URL
+    webrtc_stun_server: str = "stun:stun.l.google.com:19302"
+    # TURN服务器URL（GPU服务器本地连接）
+    webrtc_turn_server: str = "turn:127.0.0.1:10110"
+    # TURN服务器用户名
+    webrtc_turn_username: str = "vtuser"
+    # TURN服务器密码
+    webrtc_turn_password: str = "vtpass"
+
     class Config:
         env_file = ".env"
         case_sensitive = False

@@ -58,18 +58,25 @@ async def load_idle_frames(avatar_id: str) -> list:
             logger.warning(f"Avatar directory not found: {avatar_dir}")
             return []
 
+        # 尝试从 full_imgs 子目录加载
+        full_imgs_dir = os.path.join(avatar_dir, "full_imgs")
+        if os.path.exists(full_imgs_dir):
+            search_dir = full_imgs_dir
+        else:
+            search_dir = avatar_dir
+
         # 读取所有帧
         frames = []
-        frame_files = sorted([f for f in os.listdir(avatar_dir) if f.endswith('.png')])
+        frame_files = sorted([f for f in os.listdir(search_dir) if f.endswith('.png')])
 
         # 只加载前 125 帧（5秒 @ 25fps）
         for frame_file in frame_files[:125]:
-            frame_path = os.path.join(avatar_dir, frame_file)
+            frame_path = os.path.join(search_dir, frame_file)
             frame = cv2.imread(frame_path)
             if frame is not None:
                 frames.append(frame)
 
-        logger.info(f"Loaded {len(frames)} idle frames for avatar {avatar_id}")
+        logger.info(f"Loaded {len(frames)} idle frames for avatar {avatar_id} from {search_dir}")
         return frames
 
     except Exception as e:
@@ -562,10 +569,12 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
             idle_frames = await load_idle_frames(avatar_id)
 
             # 处理 offer 并生成 answer（使用 user_id，同一用户共享）
+            # 传递 websocket 以便发送 ICE candidates
             answer_sdp = await webrtc_streamer.handle_offer(
                 session_id=f"user_{user_id}",  # 使用 user_id 作为标识
                 offer_sdp=offer_sdp,
-                idle_frames=idle_frames  # 传入待机帧
+                idle_frames=idle_frames,  # 传入待机帧
+                websocket=websocket  # 传入 WebSocket 连接
             )
 
             # 发送 answer 回客户端

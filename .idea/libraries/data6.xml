@@ -1,0 +1,10 @@
+<component name="libraryTable">
+  <library name="data6">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/conda_envs/mt/lib/python3.10/site-packages/pooch/tests/data/store.zip!/" />
+      <root url="jar://$PROJECT_DIR$/conda_envs/mt/lib/python3.10/site-packages/pooch/tests/data/tiny-data.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

@@ -1,0 +1,11 @@
+<component name="libraryTable">
+  <library name="modules69">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/debugger-collections-visualizer/lib/modules/intellij.debugger.collections.visualizer.core.frontend.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/debugger-collections-visualizer/lib/modules/intellij.debugger.collections.visualizer.core.backend.jar!/" />
+      <root url="jar://$PROJECT_DIR$/root_backup/cache_backup/.cache/JetBrains/RemoteDev/dist/5db83dcb5c045_idea-2025.3.1/plugins/debugger-collections-visualizer/lib/modules/intellij.debugger.collections.visualizer.jvm.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

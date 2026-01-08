@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="gltf2.schema2">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/conda_envs/avatar/lib/python3.1/site-packages/trimesh/resources/schema/gltf2.schema.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

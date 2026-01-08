@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="my-test-package9">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/conda_envs/vtb/lib/python3.1/site-packages/pkg_resources/tests/data/my-test-package-zip/my-test-package.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

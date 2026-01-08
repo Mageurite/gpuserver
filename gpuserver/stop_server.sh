@@ -72,7 +72,8 @@ else
 fi
 
 # 检查端口是否还被占用
-PORT=19001
+PORT=$(grep WEBSOCKET_PORT .env | cut -d '=' -f2 2>/dev/null)
+PORT=${PORT:-9001}  # 如果未设置，默认使用 9001
 print_info "检查端口 $PORT..."
 
 if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
