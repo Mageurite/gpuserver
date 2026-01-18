@@ -10,6 +10,14 @@ localIP = "127.0.0.1"
 localPort = 9000
 remotePort = 10110
 
+# ----- WebSocket Server (本地9001 -> 公网19001) -----
+[[proxies]]
+name = "websocket_server"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 9001
+remotePort = 19001
+
 # ----- TURN Server (UDP for WebRTC) -----
 [[proxies]]
 name = "turn_server"

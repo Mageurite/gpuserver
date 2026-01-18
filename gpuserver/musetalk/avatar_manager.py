@@ -662,8 +662,12 @@ class AvatarManager:
         import tempfile
 
         try:
-            # 查找 avatar 的第一张图片
-            avatar_path = os.path.join(self.musetalk_base, "results", "v15", "avatars", avatar_id)
+            # 查找 avatar 的第一张图片 (优先使用 avatars_dir)
+            avatar_path = os.path.join(self.avatars_dir, avatar_id)
+            if not os.path.exists(avatar_path):
+                # 回退到 musetalk 结果目录
+                avatar_path = os.path.join(self.musetalk_base, "results", "v15", "avatars", avatar_id)
+
             full_imgs_dir = os.path.join(avatar_path, "full_imgs")
 
             if not os.path.exists(full_imgs_dir):
@@ -743,11 +747,14 @@ class AvatarManager:
             bool: 是否成功
         """
         try:
-            # 检查 avatar 是否存在
-            avatar_path = os.path.join(self.musetalk_base, "results", "v15", "avatars", avatar_id)
+            # 检查 avatar 是否存在 (优先使用 avatars_dir)
+            avatar_path = os.path.join(self.avatars_dir, avatar_id)
             if not os.path.exists(avatar_path):
-                logger.error(f"Avatar not found: {avatar_path}")
-                return False
+                # 回退到 musetalk 结果目录 (向后兼容)
+                avatar_path = os.path.join(self.musetalk_base, "results", "v15", "avatars", avatar_id)
+                if not os.path.exists(avatar_path):
+                    logger.error(f"Avatar not found in either location: {self.avatars_dir}/{avatar_id} or {avatar_path}")
+                    return False
 
             # 检查必要的文件
             coords_path = os.path.join(avatar_path, "coords.pkl")
@@ -793,19 +800,24 @@ class AvatarManager:
 
             # 设置环境变量
             env = os.environ.copy()
+
+            # 关键: 添加 MuseTalk 基础目录到 PYTHONPATH（必须在最前面）
+            pythonpath_parts = [self.musetalk_base]
+
             if self.conda_env:
                 env['PATH'] = f"{self.conda_env}/bin:{env.get('PATH', '')}"
                 env['CONDA_PREFIX'] = self.conda_env
                 env['CONDA_DEFAULT_ENV'] = os.path.basename(self.conda_env)
                 python_site = f"{self.conda_env}/lib/python3.10/site-packages"
 
-                # 关键: 添加 MuseTalk 基础目录到 PYTHONPATH
-                pythonpath_parts = [self.musetalk_base]
                 if os.path.exists(python_site):
                     pythonpath_parts.append(python_site)
-                if env.get('PYTHONPATH'):
-                    pythonpath_parts.append(env['PYTHONPATH'])
-                env['PYTHONPATH'] = ':'.join(pythonpath_parts)
+
+            if env.get('PYTHONPATH'):
+                pythonpath_parts.append(env['PYTHONPATH'])
+
+            env['PYTHONPATH'] = ':'.join(pythonpath_parts)
+            logger.info(f"Set PYTHONPATH: {env['PYTHONPATH']}")
 
             # 构建命令
             python_exe = f"{self.conda_env}/bin/python" if self.conda_env else "python"
@@ -1204,8 +1216,11 @@ class AvatarManager:
                 audio_file.write(audio_bytes)
                 audio_path = audio_file.name
 
-            # 3. 准备 MuseTalk 环境
-            avatar_path = os.path.join(self.musetalk_base, "results", "v15", "avatars", avatar_id)
+            # 3. 准备 MuseTalk 环境 (优先使用 avatars_dir)
+            avatar_path = os.path.join(self.avatars_dir, avatar_id)
+            if not os.path.exists(avatar_path):
+                # 回退到 musetalk 结果目录
+                avatar_path = os.path.join(self.musetalk_base, "results", "v15", "avatars", avatar_id)
 
             # 添加 MuseTalk 到 Python 路径
             if self.musetalk_base not in sys.path:

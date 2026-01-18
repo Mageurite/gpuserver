@@ -52,7 +52,7 @@ async def load_idle_frames(avatar_id: str) -> list:
     """
     try:
         # 获取 avatar 目录
-        avatar_dir = f"/workspace/MuseTalk/results/v15/avatars/{avatar_id}"
+        avatar_dir = f"/workspace/gpuserver/data/avatars/{avatar_id}"
 
         if not os.path.exists(avatar_dir):
             logger.warning(f"Avatar directory not found: {avatar_dir}")
