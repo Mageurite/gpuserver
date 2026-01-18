@@ -174,13 +174,31 @@ class WebRTCStreamer:
         # 获取WebRTC配置
         config = get_webrtc_config()
 
-        # 使用 Google STUN 服务器进行 NAT 穿透
+        # 配置 TURN 服务器（强制中继以使用正确的端口范围 10110-10115）
+        # 注意：aiortc 不支持 iceTransportPolicy 参数，但配置了 TURN 后会自动生成 relay candidates
         ice_servers = [
-            RTCIceServer(urls=["stun:stun.l.google.com:19302"])
+            RTCIceServer(
+                urls=[config['stun_server']],
+            ),
+            RTCIceServer(
+                urls=[config['turn_server']],
+                username=config['turn_username'],
+                credential=config['turn_password']
+            )
         ]
-        configuration = RTCConfiguration(iceServers=ice_servers)
-        
-        logger.info(f"Using STUN server for NAT traversal (P2P mode)")
+
+        # aiortc 的 RTCConfiguration 只支持 iceServers 和 bundlePolicy
+        configuration = RTCConfiguration(
+            iceServers=ice_servers
+        )
+
+        logger.info(f"WebRTC configuration for session {session_id}:")
+        logger.info(f"  STUN server: {config['stun_server']}")
+        logger.info(f"  TURN server: {config['turn_server']}")
+        logger.info(f"  TURN username: {config['turn_username']}")
+        logger.info(f"  Port range: {config['port_min']}-{config['port_max']}")
+        logger.info(f"  Note: aiortc will generate relay candidates via TURN")
+
         pc = RTCPeerConnection(configuration=configuration)
         self.connections[session_id] = pc
 
@@ -206,10 +224,6 @@ class WebRTCStreamer:
             logger.info(f"ICE gathering state: {pc.iceGatheringState}")
 
         logger.info(f"WebRTC peer connection created for session {session_id}")
-        logger.info(f"  STUN server: {config['stun_server']}")
-        logger.info(f"  TURN server: {config.get('turn_server', 'NOT CONFIGURED')}")
-        logger.info(f"  TURN username: {config.get('turn_username', 'NOT CONFIGURED')}")
-        logger.info(f"  ICE servers count: {len(ice_servers)}")
         return pc
 
     async def _send_ice_candidates_from_sdp(self, sdp: str, session_id: str, websocket):
@@ -243,6 +257,15 @@ class WebRTCStreamer:
                 if line.startswith('a=candidate:'):
                     candidate_str = line[2:]  # Remove 'a=' prefix
 
+                    # Log full candidate for debugging
+                    logger.info(f"Full candidate from SDP: {candidate_str}")
+
+                    # 只发送 relay 类型的 candidates 到前端
+                    # 这样可以强制使用 TURN 服务器，避免 aiortc 的随机端口问题
+                    if 'typ relay' not in candidate_str:
+                        logger.info(f"Skipping non-relay candidate: {candidate_str[:60]}...")
+                        continue
+
                     # Send candidate to client
                     await websocket.send_json({
                         "type": "webrtc_ice_candidate",
@@ -260,34 +283,38 @@ class WebRTCStreamer:
 
     def _modify_sdp_for_public_ip(self, sdp: str) -> str:
         """
-        修改SDP，将内网IP替换为公网IP
-        
+        修改SDP，将内网IP替换为公网IP，并只保留relay类型的candidates
+
         Args:
             sdp: 原始SDP字符串
-            
+
         Returns:
             str: 修改后的SDP字符串
         """
         config = get_webrtc_config()
         public_ip = config['public_ip']
-        
+
         # 替换 c= 行中的IP地址
         # c=IN IP4 192.168.x.x -> c=IN IP4 51.161.209.200
         sdp = re.sub(r'c=IN IP4 \d+\.\d+\.\d+\.\d+', f'c=IN IP4 {public_ip}', sdp)
-        
-        # 替换 a=candidate 行中的IP地址
-        # 保留 STUN/TURN 候选，只替换 host 类型的候选
+
+        # 过滤candidates：只保留relay类型，移除host和srflx类型
         lines = sdp.split('\n')
         modified_lines = []
-        
+
         for line in lines:
-            if line.startswith('a=candidate') and 'typ host' in line:
-                # 替换host候选中的IP地址
-                line = re.sub(r'(\d+\.\d+\.\d+\.\d+)', public_ip, line, count=1)
-            modified_lines.append(line)
-        
+            if line.startswith('a=candidate'):
+                # 只保留 typ relay 的 candidates
+                if 'typ relay' in line:
+                    modified_lines.append(line)
+                    logger.debug(f"Keeping relay candidate: {line}")
+                else:
+                    logger.debug(f"Removing non-relay candidate: {line}")
+            else:
+                modified_lines.append(line)
+
         sdp = '\n'.join(modified_lines)
-        logger.debug(f"Modified SDP with public IP: {public_ip}")
+        logger.info(f"Modified SDP: replaced IPs with {public_ip}, removed non-relay candidates")
         return sdp
 
     async def handle_offer(

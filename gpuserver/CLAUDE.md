@@ -45,62 +45,58 @@ realm=gpu-turn
 
 ## 已解决的问题 ✅
 
-1. **ICE Candidates发送** - 从SDP提取并发送 (`webrtc_streamer.py:213-243`)
-2. **ICE Candidate解析** - 使用`candidate_from_sdp()` (`webrtc_streamer.py:362-370`)
-3. **TURN服务器配置** - 已配置并运行
+1. **ICE Candidates发送** - 从SDP提取并发送 (`webrtc_streamer.py:229-282`)
+2. **ICE Candidate解析** - 使用`candidate_from_sdp()` (`webrtc_streamer.py:378-390`)
+3. **TURN服务器配置** - 已配置并运行在端口10110
+4. **前端配置获取** - Web服务器后端已添加`iceTransportPolicy`字段到`/api/webrtc/config`
+5. **aiortc随机端口问题** - GPU服务器端过滤非relay类型的candidates (`webrtc_streamer.py:263-267, 301-315`)
 
-## 当前问题 ❌
+## 解决方案总结 🎯
 
-### 核心问题：WebRTC连接失败
+### 问题：aiortc生成随机端口的candidates
 
-**原因**: 前端硬编码 `iceTransportPolicy: "all"`，忽略后端的 `"relay"` 配置
+**根本原因**:
+- aiortc库会生成3种类型的ICE candidates:
+  - `typ host`: 使用随机端口（如37384, 59138）
+  - `typ srflx`: STUN映射，也使用随机端口
+  - `typ relay`: TURN中继，使用正确的端口范围10110-10115 ✅
+- 即使配置了TURN服务器，aiortc仍然会生成所有类型的candidates
+- 前端的`iceTransportPolicy: "relay"`只影响前端选择，不影响后端生成
 
-**证据**:
-```javascript
-// 后端返回: iceTransportPolicy: "relay" ✅
-// 前端使用: iceTransportPolicy: "all"  ❌ (bundle.js:85631)
+**最终解决方案**:
+1. **Web服务器端**: 在`/api/webrtc/config`响应中添加`iceTransportPolicy: "relay"`字段
+2. **前端**: 使用后端配置中的`iceTransportPolicy`值（已修改）
+3. **GPU服务器端**: 在发送candidates给前端时，过滤掉非relay类型的candidates
+
+**关键代码修改** (`webrtc_streamer.py`):
+
+```python
+# 在 _send_ice_candidates_from_sdp 方法中 (lines 263-267)
+if 'typ relay' not in candidate_str:
+    logger.info(f"Skipping non-relay candidate: {candidate_str[:60]}...")
+    continue  # 只发送relay类型的candidates
+
+# 在 _modify_sdp_for_public_ip 方法中 (lines 301-315)
+for line in lines:
+    if line.startswith('a=candidate'):
+        if 'typ relay' in line:
+            modified_lines.append(line)  # 只保留relay candidates
+        else:
+            logger.debug(f"Removing non-relay candidate: {line}")
+    else:
+        modified_lines.append(line)
 ```
 
-**结果**:
-- aiortc使用随机端口 (43472, 37772等)
-- 这些端口不在10110-10115范围内
-- ⚠️ FRP只映射了5个UDP端口到公网，其他端口无法访问
-- TURN服务器虽然工作但未被使用
+## 当前状态 ✅
 
-## 解决方案 🎯
+**所有组件已修复**:
+- ✅ TURN服务器运行在10110端口
+- ✅ Web服务器返回`iceTransportPolicy: "relay"`配置
+- ✅ 前端使用后端配置值
+- ✅ GPU服务器过滤非relay candidates
+- ✅ 所有WebRTC流量通过TURN中继（端口10110-10115）
 
-### 必须修改前端代码（在Web服务器上）
-
-**查找文件**:
-```bash
-cd /path/to/frontend
-grep -rn "iceTransportPolicy" src/ --include="*.js" --include="*.jsx"
-grep -rn "RTCPeerConnection" src/ --include="*.js" --include="*.jsx"
-```
-
-**修改代码**:
-```javascript
-// 修改前 ❌
-const rtcConfig = {
-  iceServers: config.iceServers,
-  iceTransportPolicy: 'all',  // 硬编码
-  sdpSemantics: config.sdpSemantics || 'unified-plan'
-};
-
-// 修改后 ✅
-const rtcConfig = {
-  iceServers: config.iceServers,
-  iceTransportPolicy: config.iceTransportPolicy || 'all',  // 使用后端配置
-  sdpSemantics: config.sdpSemantics || 'unified-plan'
-};
-```
-
-**重新打包**:
-```bash
-npm run build
-```
-
-**验证成功标志**:
+**验证方法**:
 - 前端日志显示: `iceTransportPolicy: "relay"`
 - 出现 `typ relay` 类型的candidates
 - ICE连接状态: `"connected"`

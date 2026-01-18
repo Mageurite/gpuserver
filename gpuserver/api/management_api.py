@@ -413,6 +413,7 @@ async def list_avatars():
 @app.get("/v1/webrtc/config")
 @app.get("/mgmt/v1/webrtc/config")
 @app.get("/api/webrtc/config")
+@app.get("/config")  # 兼容性路由，供前端直接访问
 async def get_webrtc_config():
     """
     获取 WebRTC 配置信息
@@ -435,7 +436,7 @@ async def get_webrtc_config():
                 "credential": settings.webrtc_turn_password
             }
         ],
-        "iceTransportPolicy": "all",  # 使用all策略，允许所有类型的连接
+        "iceTransportPolicy": "relay",  # 强制使用 TURN relay，确保流量通过 10110-10115 端口
         "publicIp": settings.webrtc_public_ip,
         "portRange": {
             "min": settings.webrtc_port_min,
