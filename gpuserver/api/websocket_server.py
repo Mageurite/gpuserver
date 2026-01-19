@@ -407,20 +407,21 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
                 fps=25
             )
 
-            # 发送文本和音频响应（视频通过 WebRTC 实时流式传输）
+            # 只发送文本响应 (音频和视频都通过 WebRTC 传输)
             await send_message(websocket, {
                 "type": "text",
                 "content": response_text,
-                "audio": audio_data,
+                # "audio": audio_data,  # 已移除: 音频现在通过 WebRTC 传输
                 "role": "assistant",
                 "timestamp": datetime.now().isoformat()
             })
 
-            logger.info("WebRTC streaming response sent")
+            logger.info("WebRTC streaming response sent (audio + video via WebRTC)")
 
         elif msg_type == "text":
-            # 处理文本消息 - 流式响应模式（立即发送文本和音频）
+            # 处理文本消息 - 流式响应模式（立即发送文本）
             avatar_id = message.get("avatar_id")  # 可选的 avatar_id
+            user_id = message.get("user_id")  # 用户 ID (用于 WebRTC 音频)
 
             # 获取 tutor_id、kb_id 和 session_id（从 session 或消息中）
             tutor_id = session.tutor_id if session else message.get("tutor_id")
@@ -447,15 +448,22 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
             # 3. TTS: 文本转语音
             audio_response = await ai_engine.synthesize_speech(response)
 
-            # 4. 立即发送音频响应
-            await send_message(websocket, {
-                "type": "audio",
-                "content": response,
-                "audio": audio_response,  # base64 编码的音频
-                "role": "assistant",
-                "timestamp": datetime.now().isoformat()
-            })
-            logger.info("Audio response sent immediately")
+            # 4. 发送音频 (通过 WebRTC 或 WebSocket,取决于是否有 user_id)
+            if user_id:
+                # 通过 WebRTC 发送音频（使用全局导入的 get_webrtc_streamer）
+                streamer = get_webrtc_streamer()
+                asyncio.create_task(streamer.stream_audio(f"user_{user_id}", audio_response))
+                logger.info(f"Audio sent via WebRTC for user {user_id}")
+            else:
+                # 回退到 WebSocket 发送音频 (向后兼容)
+                await send_message(websocket, {
+                    "type": "audio",
+                    "content": response,
+                    "audio": audio_response,  # base64 编码的音频
+                    "role": "assistant",
+                    "timestamp": datetime.now().isoformat()
+                })
+                logger.info("Audio response sent via WebSocket (no user_id provided)")
 
             # 5. 可选：后台生成视频（不阻塞）
             if settings.enable_avatar and avatar_id:

@@ -273,13 +273,23 @@ class AIEngine:
         from webrtc_streamer import get_webrtc_streamer
         streamer = get_webrtc_streamer()
 
-        # 4. 实时生成并推流帧
+        # 4. 延迟音频推送，等视频开始生成后再同步推送
+        audio_task = None
+        audio_started = False
+
+        # 5. 实时生成并推流视频帧
         frame_count = 0
         async for frame in self.video_engine.generate_frames_stream(
             audio_data=audio_data,
             avatar_id=avatar_id,
             fps=fps
         ):
+            # 在推送第一帧视频时，同时启动音频推送（实现音视频同步）
+            if not audio_started:
+                audio_task = asyncio.create_task(streamer.stream_audio(session_id, audio_data))
+                audio_started = True
+                logger.info(f"✅ Started audio streaming synchronized with video for session {session_id}")
+
             # 推送帧到 WebRTC
             await streamer.stream_frame(session_id, frame)
             frame_count += 1
@@ -288,6 +298,11 @@ class AIEngine:
                 logger.info(f"Streamed {frame_count} frames to session {session_id}")
 
         logger.info(f"WebRTC streaming completed: {frame_count} frames")
+
+        # 等待音频推送完成
+        if audio_task:
+            await audio_task
+            logger.info(f"Audio streaming completed for session {session_id}")
 
         return response_text, audio_data
 
