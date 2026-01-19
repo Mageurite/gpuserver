@@ -43,6 +43,7 @@ def get_webrtc_config():
             'port_max': settings.webrtc_port_max,
             'stun_server': settings.webrtc_stun_server,
             'turn_server': getattr(settings, 'webrtc_turn_server', 'turn:51.161.209.200:10110'),
+            'turn_server_local': getattr(settings, 'webrtc_turn_server_local', 'turn:127.0.0.1:10110'),
             'turn_username': getattr(settings, 'webrtc_turn_username', 'vtuser'),
             'turn_password': getattr(settings, 'webrtc_turn_password', 'vtpass'),
         }
@@ -247,14 +248,15 @@ class WebRTCStreamer:
         # 获取WebRTC配置
         config = get_webrtc_config()
 
-        # 配置 TURN 服务器（强制中继以使用正确的端口范围 10110-10115）
-        # 注意：aiortc 不支持 iceTransportPolicy 参数，但配置了 TURN 后会自动生成 relay candidates
+        # 配置 TURN 服务器（GPU服务器端使用本地地址）
+        # GPU服务器在Docker容器内，使用127.0.0.1连接本地TURN服务器
+        # 前端使用公网地址连接TURN服务器
         ice_servers = [
             RTCIceServer(
                 urls=[config['stun_server']],
             ),
             RTCIceServer(
-                urls=[config['turn_server']],
+                urls=[config['turn_server_local']],  # 使用本地TURN地址
                 username=config['turn_username'],
                 credential=config['turn_password']
             )
@@ -267,10 +269,11 @@ class WebRTCStreamer:
 
         logger.info(f"WebRTC configuration for session {session_id}:")
         logger.info(f"  STUN server: {config['stun_server']}")
-        logger.info(f"  TURN server: {config['turn_server']}")
+        logger.info(f"  TURN server (local): {config['turn_server_local']}")
+        logger.info(f"  TURN server (public): {config['turn_server']}")
         logger.info(f"  TURN username: {config['turn_username']}")
         logger.info(f"  Port range: {config['port_min']}-{config['port_max']}")
-        logger.info(f"  Note: aiortc will generate relay candidates via TURN")
+        logger.info(f"  Note: GPU server uses local TURN, frontend uses public TURN")
 
         pc = RTCPeerConnection(configuration=configuration)
         self.connections[session_id] = pc

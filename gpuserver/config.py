@@ -75,8 +75,10 @@ class Settings(BaseSettings):
     webrtc_port_max: int = 10115
     # STUN服务器URL
     webrtc_stun_server: str = "stun:stun.l.google.com:19302"
+    # TURN服务器URL（前端使用，公网地址）
+    webrtc_turn_server: str = "turn:51.161.209.200:10110"
     # TURN服务器URL（GPU服务器本地连接）
-    webrtc_turn_server: str = "turn:127.0.0.1:10110"
+    webrtc_turn_server_local: str = "turn:127.0.0.1:10110"
     # TURN服务器用户名
     webrtc_turn_username: str = "vtuser"
     # TURN服务器密码

@@ -423,20 +423,19 @@ async def get_webrtc_config():
     Returns:
         dict: WebRTC 配置，包括 ICE 服务器等
     """
-    # 使用通过 FRP 映射的 TURN 服务器
-    # 前端通过 Web Server (51.161.130.234:10110) 访问 GPU Server 的 TURN 服务器
+    # 使用环境变量配置的 TURN 服务器
     return {
         "iceServers": [
             {
-                "urls": ["stun:stun.l.google.com:19302"]
+                "urls": [settings.webrtc_stun_server]
             },
             {
-                "urls": ["turn:51.161.209.200:10110"],  # GPU服务器的公网IP
+                "urls": [settings.webrtc_turn_server],
                 "username": settings.webrtc_turn_username,
                 "credential": settings.webrtc_turn_password
             }
         ],
-        "iceTransportPolicy": "relay",  # 强制使用 TURN relay，确保流量通过 10110-10115 端口
+        "iceTransportPolicy": "relay",  # 强制使用 TURN relay，确保流量通过中继
         "publicIp": settings.webrtc_public_ip,
         "portRange": {
             "min": settings.webrtc_port_min,

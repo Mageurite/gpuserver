@@ -1,5 +1,5 @@
 #!/bin/bash
-# GPU Server 启动脚本
+# GPU Server 启动脚本 - 启动 WebSocket 服务器和管理 API
 
 set -e  # 遇到错误立即退出
 
@@ -64,6 +64,7 @@ print_info "设置 PYTHONPATH: $PYTHONPATH"
 print_info "检查必需的文件..."
 REQUIRED_FILES=(
     "api/websocket_server.py"
+    "api/management_api.py"
     "config.py"
     "session_manager.py"
 )
@@ -76,18 +77,23 @@ for file in "${REQUIRED_FILES[@]}"; do
 done
 print_success "所有必需文件存在"
 
-# 从 .env 读取 WebSocket 端口
-PORT=$(grep WEBSOCKET_PORT .env | cut -d '=' -f2)
-PORT=${PORT:-9001}  # 如果未设置，默认使用 9001
+# 从 .env 读取端口配置
+WEBSOCKET_PORT=$(grep WEBSOCKET_PORT .env 2>/dev/null | cut -d '=' -f2)
+WEBSOCKET_PORT=${WEBSOCKET_PORT:-9001}  # 默认 9001
 
-print_info "检查端口 $PORT 是否被占用..."
-if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
-    print_warning "端口 $PORT 已被占用"
+MANAGEMENT_PORT=$(grep MANAGEMENT_API_PORT .env 2>/dev/null | cut -d '=' -f2)
+MANAGEMENT_PORT=${MANAGEMENT_PORT:-9000}  # 默认 9000
+
+print_info "检查端口是否被占用..."
+
+# 检查 WebSocket 端口
+if lsof -Pi :$WEBSOCKET_PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
+    print_warning "WebSocket 端口 $WEBSOCKET_PORT 已被占用"
     read -p "是否停止现有进程并重启？(y/n) " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         print_info "停止现有进程..."
-        lsof -ti:$PORT | xargs kill -9 2>/dev/null || true
+        lsof -ti:$WEBSOCKET_PORT | xargs kill -9 2>/dev/null || true
         sleep 2
         print_success "现有进程已停止"
     else
@@ -95,74 +101,125 @@ if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
         exit 1
     fi
 else
-    print_success "端口 $PORT 可用"
+    print_success "WebSocket 端口 $WEBSOCKET_PORT 可用"
+fi
+
+# 检查管理 API 端口
+if lsof -Pi :$MANAGEMENT_PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
+    print_warning "管理 API 端口 $MANAGEMENT_PORT 已被占用"
+    lsof -ti:$MANAGEMENT_PORT | xargs kill -9 2>/dev/null || true
+    sleep 2
+    print_success "管理 API 端口已释放"
+else
+    print_success "管理 API 端口 $MANAGEMENT_PORT 可用"
 fi
 
 # 创建日志目录
 LOG_DIR="$SCRIPT_DIR/logs"
 mkdir -p "$LOG_DIR"
-LOG_FILE="$LOG_DIR/websocket_server.log"
-print_info "日志文件: $LOG_FILE"
+WEBSOCKET_LOG="$LOG_DIR/websocket_server.log"
+MANAGEMENT_LOG="$LOG_DIR/management_api.log"
+print_info "日志目录: $LOG_DIR"
 
 # 启动服务器
-print_info "启动 GPU Server..."
+print_info "启动 GPU Server 服务..."
 echo "================================"
 
 # 启动方式选择
 if [ "$1" == "--foreground" ] || [ "$1" == "-f" ]; then
-    # 前台运行
-    print_info "前台运行模式"
+    # 前台运行（仅启动 WebSocket 服务器）
+    print_info "前台运行模式（仅 WebSocket 服务器）"
+    print_warning "管理 API 不会在前台模式启动"
     exec $PYTHON_BIN api/websocket_server.py
 else
-    # 后台运行
+    # 后台运行两个服务
     print_info "后台运行模式"
-    nohup $PYTHON_BIN api/websocket_server.py > "$LOG_FILE" 2>&1 &
-    PID=$!
 
-    # 保存 PID
-    echo $PID > "$SCRIPT_DIR/websocket_server.pid"
+    # 1. 启动 WebSocket 服务器
+    print_info "启动 WebSocket 服务器 (端口 $WEBSOCKET_PORT)..."
+    nohup $PYTHON_BIN api/websocket_server.py > "$WEBSOCKET_LOG" 2>&1 &
+    WEBSOCKET_PID=$!
+    echo $WEBSOCKET_PID > "$SCRIPT_DIR/websocket_server.pid"
+    print_success "WebSocket 服务器已启动 (PID: $WEBSOCKET_PID)"
 
-    print_success "GPU Server 已启动 (PID: $PID)"
-    print_info "日志文件: $LOG_FILE"
-
-    # 等待服务器启动
-    print_info "等待服务器启动..."
+    # 等待 WebSocket 服务器启动
     sleep 3
 
-    # 检查进程是否还在运行
-    if ps -p $PID > /dev/null 2>&1; then
-        print_success "GPU Server 运行正常"
+    # 检查 WebSocket 服务器是否运行
+    if ! ps -p $WEBSOCKET_PID > /dev/null 2>&1; then
+        print_error "WebSocket 服务器启动失败！"
+        print_info "查看日志: tail -50 $WEBSOCKET_LOG"
+        exit 1
+    fi
 
-        # 测试健康检查
-        print_info "测试健康检查接口..."
-        if command -v curl &> /dev/null; then
-            sleep 2
-            HEALTH_CHECK=$(curl -s http://localhost:$PORT/health 2>/dev/null || echo "")
-            if [ -n "$HEALTH_CHECK" ]; then
-                print_success "健康检查通过"
-                echo "$HEALTH_CHECK" | python3 -m json.tool 2>/dev/null || echo "$HEALTH_CHECK"
-            else
-                print_warning "健康检查失败，请查看日志"
-            fi
+    # 2. 启动管理 API
+    print_info "启动管理 API (端口 $MANAGEMENT_PORT)..."
+    nohup $PYTHON_BIN api/management_api.py > "$MANAGEMENT_LOG" 2>&1 &
+    MANAGEMENT_PID=$!
+    echo $MANAGEMENT_PID > "$SCRIPT_DIR/management_api.pid"
+    print_success "管理 API 已启动 (PID: $MANAGEMENT_PID)"
+
+    # 等待管理 API 启动
+    sleep 3
+
+    # 检查管理 API 是否运行
+    if ! ps -p $MANAGEMENT_PID > /dev/null 2>&1; then
+        print_error "管理 API 启动失败！"
+        print_info "查看日志: tail -50 $MANAGEMENT_LOG"
+        exit 1
+    fi
+
+    # 测试健康检查
+    print_info "测试服务健康状态..."
+    sleep 2
+
+    # 检查 WebSocket 服务器
+    if command -v curl &> /dev/null; then
+        WS_HEALTH=$(curl -s http://localhost:$WEBSOCKET_PORT/health 2>/dev/null || echo "")
+        if [ -n "$WS_HEALTH" ]; then
+            print_success "WebSocket 服务器健康检查通过"
+            echo "$WS_HEALTH" | python3 -m json.tool 2>/dev/null || echo "$WS_HEALTH"
+        else
+            print_warning "WebSocket 服务器健康检查失败"
         fi
 
         echo ""
-        echo "================================"
-        print_success "GPU Server 启动成功！"
-        echo ""
-        echo "📍 WebSocket 端点:"
-        echo "   - ws://localhost:$PORT/ws/{connection_id}"
-        echo "   - ws://localhost:$PORT/ws/ws/{connection_id}"
-        echo ""
-        echo "📊 管理命令:"
-        echo "   - 查看日志: tail -f $LOG_FILE"
-        echo "   - 停止服务: ./stop_server.sh"
-        echo "   - 查看状态: ps -p $PID"
-        echo ""
-    else
-        print_error "GPU Server 启动失败！"
-        print_info "查看日志获取详细信息:"
-        echo "   tail -50 $LOG_FILE"
-        exit 1
+
+        # 检查管理 API
+        MGMT_HEALTH=$(curl -s http://localhost:$MANAGEMENT_PORT/health 2>/dev/null || echo "")
+        if [ -n "$MGMT_HEALTH" ]; then
+            print_success "管理 API 健康检查通过"
+            echo "$MGMT_HEALTH" | python3 -m json.tool 2>/dev/null || echo "$MGMT_HEALTH"
+        else
+            print_warning "管理 API 健康检查失败"
+        fi
     fi
+
+    echo ""
+    echo "================================"
+    print_success "GPU Server 所有服务启动成功！"
+    echo ""
+    echo "🚀 服务信息:"
+    echo "   ├─ WebSocket 服务器:"
+    echo "   │  ├─ PID: $WEBSOCKET_PID"
+    echo "   │  ├─ 端口: $WEBSOCKET_PORT"
+    echo "   │  ├─ 端点: ws://localhost:$WEBSOCKET_PORT/ws/{connection_id}"
+    echo "   │  └─ 日志: $WEBSOCKET_LOG"
+    echo "   │"
+    echo "   └─ 管理 API:"
+    echo "      ├─ PID: $MANAGEMENT_PID"
+    echo "      ├─ 端口: $MANAGEMENT_PORT"
+    echo "      ├─ 端点: http://localhost:$MANAGEMENT_PORT"
+    echo "      └─ 日志: $MANAGEMENT_LOG"
+    echo ""
+    echo "📊 管理命令:"
+    echo "   - 查看 WebSocket 日志: tail -f $WEBSOCKET_LOG"
+    echo "   - 查看管理 API 日志: tail -f $MANAGEMENT_LOG"
+    echo "   - 停止所有服务: ./stop_server.sh"
+    echo "   - 查看进程状态: ps -p $WEBSOCKET_PID,$MANAGEMENT_PID"
+    echo ""
+    echo "🔍 健康检查:"
+    echo "   - WebSocket: curl http://localhost:$WEBSOCKET_PORT/health"
+    echo "   - 管理 API: curl http://localhost:$MANAGEMENT_PORT/health"
+    echo ""
 fi

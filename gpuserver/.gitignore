@@ -8,11 +8,6 @@ __pycache__/
 dist/
 build/
 
-# 环境变量
-.env
-.env.local
-.env.*.local
-
 # 日志文件
 logs/
 *.log
