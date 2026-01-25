@@ -191,14 +191,34 @@ Real-time avatar video uses WebRTC with custom STUN/TURN configuration:
 - **Port constraint**: aiortc MUST use TURN relay because only UDP 10110-10115 are accessible from internet
 
 **双地址配置 (Critical)**:
-- **GPU Server (aiortc)**: Uses `WEBRTC_TURN_SERVER_LOCAL=turn:127.0.0.1:10110` (local address, because GPU server is in Docker container at 172.17.0.3 and cannot access public IP)
+- **GPU Server (aiortc)**: Uses `WEBRTC_TURN_SERVER_LOCAL=turn:127.0.0.1:10110` (local address, because GPU server is in Docker container at 172.17.0.3 and cannot access public IP for TURN connection)
 - **Frontend (browser)**: Uses `WEBRTC_TURN_SERVER=turn:51.161.209.200:10110` (public address, returned by `/v1/webrtc/config` API)
-- **Why**: GPU server in Docker container (172.17.0.3) cannot connect to its own public IP (51.161.209.200), must use localhost
+- **Why**: GPU server in Docker container (172.17.0.3) cannot connect to its own public IP (51.161.209.200) for TURN control channel, must use localhost
 
 **TURN Server Configuration** (`/etc/turnserver.conf`):
 - **CRITICAL**: Must NOT have `no-loopback-peers` - this prevents relay-to-relay communication
 - Configuration allows both peers to use the same TURN server and communicate through relay channels
 - Port range: 10111-10115 (10110 is for TURN control, 10111-10115 for relay)
+
+**ICE Candidate 过滤逻辑** (`webrtc_streamer.py`):
+- **GPU Server 发送**: 只发送 `typ relay` candidates 给前端（过滤掉 host/srflx 的随机端口）
+- **GPU Server 接收**: **不修改**前端发来的 relay candidates 的 IP 地址
+- **关键理解**: 前端的 relay candidate (如 `51.161.209.200:10113`) 是 TURN 服务器分配的 relay 端口，GPU Server 应该直接连接到这个公网地址，TURN 服务器负责在不同 relay 端口之间转发数据
+- **错误做法**: ❌ 将前端的 `51.161.209.200` 替换为 `127.0.0.1` 会导致连接失败
+- **正确做法**: ✅ 保持前端 relay candidate 原样，让 GPU Server 的 TURN client 连接到前端的 TURN relay 端口
+
+**工作流程**:
+```
+GPU Server (172.17.0.3)
+    ↓ 连接到本地 TURN (127.0.0.1:10110)
+    ↓ TURN 分配 relay 端口 (如 51.161.209.200:10112)
+    ↓
+TURN 服务器 (中继转发)
+    ↓
+    ↓ 连接到前端的 relay 端口 (如 51.161.209.200:10113)
+    ↑ 前端连接到 TURN (51.161.209.200:10110)
+前端浏览器
+```
 
 Key files: `webrtc_streamer.py`, `api/websocket_server.py`, `config.py`
 
@@ -209,8 +229,9 @@ The streamer supports idle video frames that loop when no active speech is being
 2. Frontend uses `iceTransportPolicy: "all"` instead of `"relay"`
 3. Ports outside 10110-10115 range are attempted (they won't be accessible)
 4. `/etc/turnserver.conf` has `no-loopback-peers` enabled (prevents relay-to-relay communication)
-5. GPU server tries to use public IP instead of localhost for TURN connection
+5. GPU server tries to use public IP instead of localhost for TURN **control connection** (but relay candidates should keep public IP)
 6. TURN server ports exhausted (only 5 ports available, restart TURN to clear: `kill <pid> && turnserver -c /etc/turnserver.conf -o &`)
+7. ❌ **错误地修改前端 relay candidates 的 IP 地址** - 这会破坏 TURN relay-to-relay 通信
 
 ### WebSocket Message Protocol
 
@@ -684,3 +705,5 @@ ss -tulnp | grep -E "(9000|9001|10110)"
 **GPU服务器**: 49.213.134.9:32537 (SSH: `ssh new`)
 **公网IP**: 51.161.209.200 (FRP映射，仅5个UDP端口)
 **状态**: 🟡 等待Web服务器上修改前端代码
+
+virtual-tutor的内容是参考项，可以参考它的代码内容来实现降低延迟，不要动其中的任何代码，仅供参考且端口和ip地址以本项目为准，不以virtual-tutor中的为准。

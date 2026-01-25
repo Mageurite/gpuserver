@@ -2,13 +2,15 @@
 serverAddr = "51.161.209.200"  
 serverPort = 7504       
 
-# ----- GPU Server API (本地9000 -> 公网10110) -----
+# ----- GPU Server API (本地9000 -> 公网19000) -----
+# 注意: 端口 10110-10115 已通过 Docker 直接映射，专门用于 WebRTC
+# 所以 Management API 必须使用不同的端口 19000
 [[proxies]]
 name = "gpu_server_api"
 type = "tcp"
 localIP = "127.0.0.1"
 localPort = 9000
-remotePort = 10110
+remotePort = 19000
 
 # ----- WebSocket Server (本地9001 -> 公网19001) -----
 [[proxies]]

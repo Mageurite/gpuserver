@@ -1,7 +1,7 @@
 import asyncio
 import base64
 import logging
-from typing import Optional, Dict
+from typing import Optional, Dict, AsyncIterator
 from threading import Lock
 
 # Initialize logger first
@@ -124,6 +124,54 @@ class AIEngine:
         
         logger.info(f"Generated response: {response[:100]}...")
         return response
+
+    async def stream_text_response(
+        self,
+        text: str,
+        tutor_id: int = None,
+        kb_id: Optional[str] = None,
+        session_id: Optional[str] = None
+    ) -> AsyncIterator[str]:
+        """
+        流式处理文本响应（逐 token 输出）
+
+        Args:
+            text: 用户输入的文本
+            tutor_id: 导师 ID（用于验证，应该与实例的 tutor_id 一致）
+            kb_id: 知识库 ID（可选，用于 RAG）
+            session_id: 会话 ID（可选，用于区分不同的聊天历史）
+
+        Yields:
+            str: LLM 生成的 token 流
+        """
+        # 验证 tutor_id 是否匹配
+        if tutor_id and tutor_id != self.tutor_id:
+            logger.warning(f"tutor_id mismatch: instance={self.tutor_id}, request={tutor_id}")
+
+        logger.info(f"Streaming text response: tutor_id={tutor_id}, kb_id={kb_id}, session_id={session_id}, text={text[:50]}...")
+
+        # RAG 检索：如果 kb_id 存在，先进行知识库检索
+        context = None
+        if kb_id:
+            logger.info(f"Performing RAG retrieval for kb_id={kb_id}")
+            try:
+                # 检索相关文档
+                retrieved_docs = await self.rag_engine.retrieve(
+                    query=text,
+                    kb_id=kb_id,
+                    user_id=tutor_id or self.tutor_id  # 使用 tutor_id 作为 user_id
+                )
+
+                # 格式化为 LLM 上下文
+                context = self.rag_engine.format_context(retrieved_docs)
+                logger.info(f"RAG retrieved {len(retrieved_docs)} documents")
+            except Exception as e:
+                logger.error(f"RAG retrieval failed: {e}, using direct LLM")
+                context = None
+
+        # 流式生成 LLM 响应
+        async for token in self.llm_engine.stream_generate(text=text, context=context):
+            yield token
 
     async def process_audio(self, audio_data: str) -> str:
         """

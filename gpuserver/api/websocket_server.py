@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Optional, Dict
 from datetime import datetime
 import os
@@ -206,6 +207,17 @@ async def websocket_endpoint(
         ai_engine = get_ai_engine(session.tutor_id)
         logger.info(f"AI engine initialized for tutor_id={session.tutor_id}")
 
+        # 预热 subprocess 推理引擎（异步，不阻塞）
+        # 使用 ai_engine 中的 avatar_manager 实例，确保复用同一个引擎
+        avatar_id = f"avatar_tutor_{session.tutor_id}"
+        try:
+            if hasattr(ai_engine, 'avatar_manager') and ai_engine.avatar_manager:
+                ai_engine.avatar_manager.warmup_subprocess_engine(avatar_id)
+            else:
+                logger.warning(f"AI engine does not have avatar_manager, skipping warmup")
+        except Exception as e:
+            logger.warning(f"Failed to warmup subprocess engine for {avatar_id}: {e}")
+
     # 自动发送待机视频（如果启用了 Avatar）
     # 注意：在 user-based 模式下，可能需要等待第一条消息来确定 avatar_id
     if settings.enable_avatar and not is_user_based and session:
@@ -262,6 +274,17 @@ async def websocket_endpoint(
                     if not ai_engine:
                         ai_engine = get_ai_engine(tutor_id)
                         logger.info(f"AI engine created dynamically for tutor_id={tutor_id}")
+
+                        # 预热 subprocess 推理引擎（异步，不阻塞）
+                        # 使用 ai_engine 中的 avatar_manager 实例，确保复用同一个引擎
+                        avatar_id = f"avatar_tutor_{tutor_id}"
+                        try:
+                            if hasattr(ai_engine, 'avatar_manager') and ai_engine.avatar_manager:
+                                ai_engine.avatar_manager.warmup_subprocess_engine(avatar_id)
+                            else:
+                                logger.warning(f"AI engine does not have avatar_manager, skipping warmup")
+                        except Exception as e:
+                            logger.warning(f"Failed to warmup subprocess engine for {avatar_id}: {e}")
 
                     # 直接处理消息（无 session）
                     await handle_message(websocket, None, message, ai_engine, is_user_based)
@@ -323,6 +346,80 @@ async def websocket_endpoint(
             logger.info(f"Connection cleaned up (session-based): connection_id={connection_id}")
 
 
+async def stream_audio_video(
+    ai_engine,
+    text: str,
+    avatar_id: str,
+    user_id: int,
+    websocket: WebSocket
+):
+    """
+    并行处理音视频生成和推送（逐帧流式）
+    
+    架构（参考 virtual-tutor）:
+    1. TTS 生成音频
+    2. MuseTalk realtime_engine 生成帧 → res_frame_queue
+    3. process_frames 线程: res_frame_queue → video_track.frame_queue
+    4. WebRTC track.recv(): frame_queue → 客户端
+    
+    Args:
+        ai_engine: AI 引擎实例
+        text: 完整文本
+        avatar_id: Avatar ID
+        user_id: 用户 ID
+        websocket: WebSocket 连接（用于错误通知）
+    """
+    try:
+        streamer = get_webrtc_streamer()
+        session_id = f"user_{user_id}"
+        
+        # 获取 video_track（WebRTC track）
+        if session_id not in streamer.video_tracks:
+            logger.error(f"No video track found for session {session_id}")
+            await send_error(websocket, "WebRTC connection not established")
+            return
+        
+        video_track = streamer.video_tracks[session_id]
+        
+        # ====== 阶段2: TTS 生成（完整音频）======
+        logger.info(f"[Pipeline] Stage 2: TTS generation...")
+        audio_data = await ai_engine.synthesize_speech(text)
+        logger.info(f"[Pipeline] Stage 2 complete: audio_length={len(audio_data)}")
+        
+        # ====== 阶段3: 启动 realtime_engine 生成帧到 res_frame_queue ======
+        logger.info(f"[Pipeline] Stage 3: Starting realtime frame generation...")
+        
+        # 启动音频推送（与视频并行）
+        audio_task = asyncio.create_task(
+            streamer.stream_audio(session_id, audio_data)
+        )
+        logger.info(f"[Pipeline] 🔊 Audio streaming started")
+        
+        # 启动视频生成（realtime_engine 会将帧放入 res_frame_queue）
+        # 同时启动 process_frames 线程将帧从 res_frame_queue 转移到 video_track.frame_queue
+        frame_count = 0
+        async for frame in ai_engine.video_engine.generate_frames_stream(
+            audio_data=audio_data, avatar_id=avatar_id, fps=25
+        ):
+            # 直接将帧推送到 video_track 的 frame_queue
+            await video_track.frame_queue.put(frame)
+            frame_count += 1
+            if frame_count == 1:
+                logger.info(f"[Pipeline] ⚡ First frame pushed to WebRTC queue")
+            if frame_count % 20 == 0:
+                logger.info(f"[Pipeline] 📤 Pushed {frame_count} frames to WebRTC (qsize={video_track.frame_queue.qsize()})")
+        
+        logger.info(f"[Pipeline] Stage 3 complete: {frame_count} frames generated")
+        
+        # 等待音频完成
+        await audio_task
+        logger.info(f"[Pipeline] ✅ Complete: {frame_count} frames, audio delivered")
+        
+    except Exception as e:
+        logger.error(f"[Pipeline] ❌ Failed: {e}", exc_info=True)
+        await send_error(websocket, f"Processing failed: {str(e)}")
+
+
 async def handle_message(websocket: WebSocket, session, message: dict, ai_engine, is_user_based: bool = False):
     """
     处理客户端消息
@@ -381,7 +478,7 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
             logger.info("Idle video sent successfully")
 
         elif msg_type == "text_webrtc":
-            # 处理文本消息 - WebRTC 实时流式传输模式
+            # 处理文本消息 - WebRTC 实时流式传输模式（三阶段流式 Pipeline）
             avatar_id = message.get("avatar_id")  # 必需的 avatar_id
             user_id = message.get("user_id")  # 前端传入的 user_id
             engine_session_id = message.get("engine_session_id")  # 用于路由的 session_id
@@ -394,29 +491,58 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
                 await send_error(websocket, "user_id is required for WebRTC streaming")
                 return
 
+            # 获取 tutor_id、kb_id 和 session_id（从 session 或消息中）
+            tutor_id = session.tutor_id if session else message.get("tutor_id")
+            kb_id = session.kb_id if session else message.get("kb_id")
+            session_id_for_chat = message.get("session_id")  # 用于区分聊天历史
+
             # 在 user-based 模式下，engine_session_id 应该已经在外层处理
             # 这里记录日志以便调试
             session_id_log = session.session_id if session else "sessionless"
             logger.info(f"Processing text with WebRTC streaming: avatar_id={avatar_id}, user_id={user_id}, engine_session_id={engine_session_id}, session_id={session_id_log}")
 
-            # 使用 WebRTC 流式传输（使用 user_id，同一用户共享）
-            response_text, audio_data = await ai_engine.stream_video_webrtc(
-                text=content,
-                avatar_id=avatar_id,
-                session_id=f"user_{user_id}",  # 使用 user_id 作为标识
-                fps=25
-            )
+            # 记录开始时间
+            start_time = time.time()
 
-            # 只发送文本响应 (音频和视频都通过 WebRTC 传输)
+            # ====== 阶段1: LLM 流式生成 ======
+            full_text = ""
+            first_token_time = None
+
+            async for token in ai_engine.stream_text_response(
+                text=content, tutor_id=tutor_id, kb_id=kb_id, session_id=session_id_for_chat
+            ):
+                # 记录首 token 时间
+                if first_token_time is None:
+                    first_token_time = time.time()
+                    logger.info(f"⚡ First token: {first_token_time - start_time:.2f}s")
+
+                # 立即发送 token
+                await send_message(websocket, {
+                    "type": "text_stream",
+                    "token": token,
+                    "role": "assistant",
+                    "timestamp": datetime.now().isoformat()
+                })
+
+                full_text += token
+
+            # 发送完成信号
             await send_message(websocket, {
-                "type": "text",
-                "content": response_text,
-                # "audio": audio_data,  # 已移除: 音频现在通过 WebRTC 传输
+                "type": "text_complete",
+                "content": full_text,
                 "role": "assistant",
                 "timestamp": datetime.now().isoformat()
             })
 
-            logger.info("WebRTC streaming response sent (audio + video via WebRTC)")
+            text_complete_time = time.time()
+            logger.info(f"Text complete: {text_complete_time - start_time:.2f}s")
+
+            # ====== 阶段2+3: 音视频异步处理 ======
+            asyncio.create_task(
+                stream_audio_video(ai_engine, full_text, avatar_id, user_id, websocket)
+            )
+
+            logger.info("WebRTC streaming response initiated (audio + video via WebRTC)")
 
         elif msg_type == "text":
             # 处理文本消息 - 流式响应模式（立即发送文本）

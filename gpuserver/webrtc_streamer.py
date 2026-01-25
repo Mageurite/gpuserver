@@ -15,6 +15,8 @@ import logging
 import uuid
 import re
 import os
+import time
+from datetime import datetime
 from typing import Optional, Dict
 import numpy as np
 import cv2
@@ -53,6 +55,7 @@ def get_webrtc_config():
 class AvatarVideoTrack(VideoStreamTrack):
     """
     Custom video track that streams avatar frames in real-time
+    参考: virtual-tutor/lip-sync/webrtc.py PlayerStreamTrack
     """
 
     def __init__(self, idle_frames=None):
@@ -60,19 +63,26 @@ class AvatarVideoTrack(VideoStreamTrack):
         self.frame_queue = asyncio.Queue(maxsize=30)  # Buffer up to 30 frames
         self._timestamp = 0
         self._frame_count = 0
+        self._start_time = None  # 开始时间
+        self.current_frame_count = 0  # 当前帧计数
         self.idle_frames = idle_frames or []  # 待机视频帧列表
         self.idle_frame_index = 0  # 当前待机帧索引
         self.is_streaming = False  # 是否正在流式传输对话视频
+        
+        # 时间常量（参考 virtual-tutor）
+        self.VIDEO_PTIME = 1 / 25  # 25fps = 40ms per frame
+        self.VIDEO_CLOCK_RATE = 90000
 
     async def recv(self):
         """
         Receive next video frame
-
+        简化版本：让 aiortc 自己控制帧率，我们只负责提供帧数据
+        
         Returns:
             VideoFrame: Next frame to send to client
         """
         try:
-            # 尝试从队列获取帧（非阻塞）
+            # 尝试从队列获取帧（非阻塞，短超时）
             frame_data = await asyncio.wait_for(
                 self.frame_queue.get(),
                 timeout=0.04  # 40ms = 25fps
@@ -83,15 +93,21 @@ class AvatarVideoTrack(VideoStreamTrack):
                 raise StopAsyncIteration
 
             # 标记为正在流式传输
-            self.is_streaming = True
+            if not self.is_streaming:
+                logger.info(f"📺 WebRTC track: Started streaming generated frames")
+                self.is_streaming = True
 
             # Convert numpy array to VideoFrame
             frame = VideoFrame.from_ndarray(frame_data, format="bgr24")
             frame.pts = self._timestamp
-            frame.time_base = fractions.Fraction(1, 25)  # 25 fps
-
-            self._timestamp += 1
+            frame.time_base = fractions.Fraction(1, 90000)  # 标准 RTP 时钟频率
+            
+            # 递增 timestamp（每帧 +3600 = 40ms @ 90kHz）
+            self._timestamp += 3600
             self._frame_count += 1
+            
+            if self._frame_count % 20 == 0:
+                logger.info(f"📺 WebRTC track: Sent {self._frame_count} frames (qsize={self.frame_queue.qsize()})")
 
             return frame
 
@@ -104,8 +120,8 @@ class AvatarVideoTrack(VideoStreamTrack):
 
                 frame = VideoFrame.from_ndarray(idle_frame, format="bgr24")
                 frame.pts = self._timestamp
-                frame.time_base = fractions.Fraction(1, 25)
-                self._timestamp += 1
+                frame.time_base = fractions.Fraction(1, 90000)
+                self._timestamp += 3600  # 40ms @ 90kHz
 
                 # 如果之前在流式传输，现在切换回待机
                 if self.is_streaming:
@@ -118,8 +134,8 @@ class AvatarVideoTrack(VideoStreamTrack):
                 black_frame = np.zeros((512, 512, 3), dtype=np.uint8)
                 frame = VideoFrame.from_ndarray(black_frame, format="bgr24")
                 frame.pts = self._timestamp
-                frame.time_base = fractions.Fraction(1, 25)
-                self._timestamp += 1
+                frame.time_base = fractions.Fraction(1, 90000)
+                self._timestamp += 3600
                 return frame
 
     async def add_frame(self, frame: np.ndarray):
@@ -153,6 +169,7 @@ class AvatarVideoTrack(VideoStreamTrack):
 class AvatarAudioTrack(AudioStreamTrack):
     """
     Custom audio track that streams TTS audio in real-time
+    参考: virtual-tutor/lip-sync/webrtc.py PlayerStreamTrack (audio)
     """
 
     def __init__(self):
@@ -161,11 +178,15 @@ class AvatarAudioTrack(AudioStreamTrack):
         self._timestamp = 0
         self._sample_rate = 48000  # WebRTC 标准采样率
         self._samples_per_frame = 960  # 20ms @ 48kHz
+        self._start_time = None
+        self.current_frame_count = 0
+        self.AUDIO_PTIME = 0.020  # 20ms audio packetization
 
     async def recv(self):
         """
         Receive next audio frame (每 20ms 调用一次)
-
+        简化版本：让 aiortc 自己控制帧率
+        
         Returns:
             AudioFrame: 960 samples @ 48kHz, s16, mono
         """
@@ -188,7 +209,8 @@ class AvatarAudioTrack(AudioStreamTrack):
 
             # 填充音频数据
             frame.planes[0].update(audio_samples.tobytes())
-
+            
+            # 递增 timestamp
             self._timestamp += self._samples_per_frame
 
             return frame
@@ -201,9 +223,7 @@ class AvatarAudioTrack(AudioStreamTrack):
             frame.pts = self._timestamp
             frame.time_base = fractions.Fraction(1, self._sample_rate)
             frame.planes[0].update(silence.tobytes())
-
             self._timestamp += self._samples_per_frame
-
             return frame
 
     async def add_audio_chunk(self, audio_samples: np.ndarray):
@@ -248,15 +268,15 @@ class WebRTCStreamer:
         # 获取WebRTC配置
         config = get_webrtc_config()
 
-        # 配置 TURN 服务器（GPU服务器端使用本地地址）
-        # GPU服务器在Docker容器内，使用127.0.0.1连接本地TURN服务器
-        # 前端使用公网地址连接TURN服务器
+        # 配置 TURN 服务器
+        # ⚠️ 修改：GPU服务器也使用公网TURN地址（实测可以连接）
+        # 这样GPU服务器和前端都使用相同的TURN服务器地址
         ice_servers = [
             RTCIceServer(
                 urls=[config['stun_server']],
             ),
             RTCIceServer(
-                urls=[config['turn_server_local']],  # 使用本地TURN地址
+                urls=[config['turn_server']],  # 使用公网TURN地址
                 username=config['turn_username'],
                 credential=config['turn_password']
             )
@@ -269,8 +289,7 @@ class WebRTCStreamer:
 
         logger.info(f"WebRTC configuration for session {session_id}:")
         logger.info(f"  STUN server: {config['stun_server']}")
-        logger.info(f"  TURN server (local): {config['turn_server_local']}")
-        logger.info(f"  TURN server (public): {config['turn_server']}")
+        logger.info(f"  TURN server: {config['turn_server']} (public, used by both frontend and GPU server)")
         logger.info(f"  TURN username: {config['turn_username']}")
         logger.info(f"  Port range: {config['port_min']}-{config['port_max']}")
         logger.info(f"  Note: GPU server uses local TURN, frontend uses public TURN")
@@ -301,6 +320,19 @@ class WebRTCStreamer:
         @pc.on("connectionstatechange")
         async def on_connectionstatechange():
             logger.info(f"WebRTC connection state: {pc.connectionState}")
+            
+            # 通知前端连接状态变化
+            if session_id in self.websockets:
+                try:
+                    await self.websockets[session_id].send_json({
+                        "type": "webrtc_state",
+                        "state": pc.connectionState,
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    logger.info(f"Sent WebRTC state to frontend: {pc.connectionState}")
+                except Exception as e:
+                    logger.error(f"Failed to send WebRTC state: {e}")
+            
             if pc.connectionState == "failed" or pc.connectionState == "closed":
                 await self.close_connection(session_id)
 
@@ -346,9 +378,9 @@ class WebRTCStreamer:
                     logger.info(f"Full candidate from SDP: {candidate_str}")
 
                     # 只发送 relay 类型的 candidates 到前端
-                    # 这样可以强制使用 TURN 服务器，避免 aiortc 的随机端口问题
+                    # 原因：只有 10110-10115 端口被映射到公网，其他端口无法从外部访问
                     if 'typ relay' not in candidate_str:
-                        logger.info(f"Skipping non-relay candidate: {candidate_str[:60]}...")
+                        logger.info(f"Skipping non-relay candidate (port not accessible): {candidate_str[:60]}...")
                         continue
 
                     # Send candidate to client
@@ -360,7 +392,7 @@ class WebRTCStreamer:
                             "sdpMid": sdp_mid
                         }
                     })
-                    logger.info(f"Sent ICE candidate to client for session {session_id}: {candidate_str[:60]}...")
+                    logger.info(f"Sent relay ICE candidate to client for session {session_id}: {candidate_str[:60]}...")
 
             logger.info(f"Finished sending ICE candidates for session {session_id}")
         except Exception as e:
@@ -384,6 +416,7 @@ class WebRTCStreamer:
         sdp = re.sub(r'c=IN IP4 \d+\.\d+\.\d+\.\d+', f'c=IN IP4 {public_ip}', sdp)
 
         # 过滤candidates：只保留relay类型，移除host和srflx类型
+        # 原因：只有 10110-10115 端口被映射到公网，其他端口（如 39498）无法访问
         lines = sdp.split('\n')
         modified_lines = []
 
@@ -394,12 +427,12 @@ class WebRTCStreamer:
                     modified_lines.append(line)
                     logger.debug(f"Keeping relay candidate: {line}")
                 else:
-                    logger.debug(f"Removing non-relay candidate: {line}")
+                    logger.debug(f"Removing non-relay candidate (inaccessible port): {line}")
             else:
                 modified_lines.append(line)
 
         sdp = '\n'.join(modified_lines)
-        logger.info(f"Modified SDP: replaced IPs with {public_ip}, removed non-relay candidates")
+        logger.info(f"Modified SDP: replaced IPs with {public_ip}, kept only relay candidates")
         return sdp
 
     async def handle_offer(
@@ -434,6 +467,19 @@ class WebRTCStreamer:
         # Create answer
         answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
+
+        # 等待 ICE gathering 完成（确保获取到所有candidates包括TURN relay）
+        # 如果 gathering 状态已经是 'complete'，这个循环会立即退出
+        max_wait = 5  # 最多等待5秒
+        waited = 0
+        while pc.iceGatheringState != "complete" and waited < max_wait:
+            await asyncio.sleep(0.1)
+            waited += 0.1
+        
+        if pc.iceGatheringState != "complete":
+            logger.warning(f"ICE gathering not complete after {max_wait}s, proceeding anyway")
+        else:
+            logger.info(f"ICE gathering completed in {waited:.2f}s")
 
         # 修改SDP以使用公网IP
         modified_sdp = self._modify_sdp_for_public_ip(pc.localDescription.sdp)
@@ -581,6 +627,11 @@ class WebRTCStreamer:
         Args:
             session_id: Session identifier
         """
+        # 检查连接是否存在（避免重复关闭导致 KeyError）
+        if session_id not in self.connections:
+            logger.debug(f"Connection {session_id} already closed or not found")
+            return
+        
         if session_id in self.video_tracks:
             await self.video_tracks[session_id].end_stream()
             del self.video_tracks[session_id]
@@ -591,6 +642,10 @@ class WebRTCStreamer:
         if session_id in self.connections:
             await self.connections[session_id].close()
             del self.connections[session_id]
+        
+        # 清理 WebSocket 引用
+        if session_id in self.websockets:
+            del self.websockets[session_id]
 
         logger.info(f"WebRTC connection closed for session {session_id}")
 

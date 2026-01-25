@@ -5,9 +5,10 @@ LLM 引擎实现
 支持按 tutor_id 配置不同模型。
 """
 
+import asyncio
 import logging
 import os
-from typing import Optional, Dict
+from typing import Optional, Dict, AsyncIterator
 from threading import Lock
 from functools import lru_cache
 
@@ -121,6 +122,60 @@ class LLMEngine:
         )
         logger.info(f"Generated mock response: {mock_response[:100]}...")
         return mock_response
+
+    async def stream_generate(
+        self,
+        text: str,
+        context: Optional[str] = None
+    ) -> AsyncIterator[str]:
+        """
+        流式生成 LLM 响应（逐 token 输出）
+
+        Args:
+            text: 用户输入的文本
+            context: 可选的上下文信息（用于 RAG，当前版本暂未实现）
+
+        Yields:
+            str: LLM 生成的 token 流
+        """
+        logger.info(f"LLM streaming response for tutor_id={self.tutor_id}, text={text[:50]}...")
+
+        # 如果启用了 LLM 且有可用的 chain，使用真实 LLM 流式生成
+        if self.use_llm and self.llm_chain is not None:
+            try:
+                # 构建输入
+                input_data = {"input": text}
+
+                # TODO: 如果 context 存在，应该将其添加到 prompt 中（用于 RAG）
+                if context:
+                    logger.info(f"Context provided but RAG integration not yet implemented")
+
+                # 调用 LLM 流式生成响应
+                async for chunk in self.llm_chain.astream(input_data):
+                    yield chunk
+
+                logger.info(f"LLM stream completed for tutor_id={self.tutor_id}")
+                return
+
+            except Exception as e:
+                logger.error(f"LLM stream failed for tutor_id={self.tutor_id}: {e}, falling back to Mock")
+                # 异常时降级到阻塞式调用
+                response = await self.generate(text, context)
+                yield response
+                return
+
+        # Mock 模式流式生成（模拟逐字输出）
+        mock_response = (
+            f"[Mock LLM Stream - Tutor {self.tutor_id}] "
+            f"您刚才说：「{text}」。这是一个模拟的流式 LLM 回复。"
+            f"在真实环境中，这里会调用 LLM 模型逐 token 生成智能回复。"
+        )
+        logger.info(f"Generating mock stream response: {mock_response[:100]}...")
+
+        # 模拟逐字输出
+        for char in mock_response:
+            await asyncio.sleep(0.05)  # 模拟生成延迟
+            yield char
 
 
 # 按 tutor_id 隔离的 LLM 引擎实例缓存
