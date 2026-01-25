@@ -71,6 +71,8 @@ def inference_loop(
             # 从队列获取音频特征（1秒超时）
             whisper_chunks = audio_feat_queue.get(timeout=1)
         except Empty:
+            # 队列为空，短暂休眠避免 CPU 100%
+            time.sleep(0.1)
             continue
 
         starttime = time.perf_counter()

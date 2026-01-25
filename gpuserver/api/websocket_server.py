@@ -389,18 +389,22 @@ async def stream_audio_video(
         # ====== 阶段3: 启动 realtime_engine 生成帧到 res_frame_queue ======
         logger.info(f"[Pipeline] Stage 3: Starting realtime frame generation...")
         
-        # 启动音频推送（与视频并行）
-        audio_task = asyncio.create_task(
-            streamer.stream_audio(session_id, audio_data)
-        )
-        logger.info(f"[Pipeline] 🔊 Audio streaming started")
+        # 先启动视频生成，等第一帧出现后再启动音频（实现音视频同步）
+        audio_task = None
+        audio_started = False
         
-        # 启动视频生成（realtime_engine 会将帧放入 res_frame_queue）
-        # 同时启动 process_frames 线程将帧从 res_frame_queue 转移到 video_track.frame_queue
         frame_count = 0
         async for frame in ai_engine.video_engine.generate_frames_stream(
             audio_data=audio_data, avatar_id=avatar_id, fps=25
         ):
+            # 在推送第一帧视频时，同时启动音频推送（实现音视频同步）
+            if not audio_started:
+                audio_task = asyncio.create_task(
+                    streamer.stream_audio(session_id, audio_data)
+                )
+                audio_started = True
+                logger.info(f"[Pipeline] 🔊 Audio streaming started (synchronized with first video frame)")
+            
             # 直接将帧推送到 video_track 的 frame_queue
             await video_track.frame_queue.put(frame)
             frame_count += 1
@@ -412,7 +416,8 @@ async def stream_audio_video(
         logger.info(f"[Pipeline] Stage 3 complete: {frame_count} frames generated")
         
         # 等待音频完成
-        await audio_task
+        if audio_task:
+            await audio_task
         logger.info(f"[Pipeline] ✅ Complete: {frame_count} frames, audio delivered")
         
     except Exception as e:
@@ -523,6 +528,10 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
                     "role": "assistant",
                     "timestamp": datetime.now().isoformat()
                 })
+                
+                # 调试：记录发送
+                if first_token_time is not None and (time.time() - first_token_time) < 0.1:
+                    logger.info(f"📤 Sent first text_stream token: {token[:20]}...")
 
                 full_text += token
 
@@ -536,6 +545,14 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
 
             text_complete_time = time.time()
             logger.info(f"Text complete: {text_complete_time - start_time:.2f}s")
+
+            # 发送状态消息，告知前端音视频生成已启动
+            await send_message(websocket, {
+                "type": "processing_status",
+                "status": "generating_audio_video",
+                "message": "正在生成音视频...",
+                "timestamp": datetime.now().isoformat()
+            })
 
             # ====== 阶段2+3: 音视频异步处理 ======
             asyncio.create_task(
