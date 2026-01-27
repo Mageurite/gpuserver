@@ -304,12 +304,37 @@ class RealtimeInferenceEngine:
         2. 放入队列
         3. 从帧队列实时读取并yield
         """
+        import subprocess
+        
         # 1. 解码音频
         audio_bytes = base64.b64decode(audio_data)
 
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+        # 先保存原始音频（可能是 MP3 或 WAV）
+        with tempfile.NamedTemporaryFile(suffix='.tmp', delete=False) as f:
             f.write(audio_bytes)
-            audio_path = f.name
+            temp_audio_path = f.name
+
+        # 使用 ffmpeg 转换为 16kHz mono WAV（MuseTalk 要求的格式）
+        audio_path = temp_audio_path.replace('.tmp', '.wav')
+        try:
+            cmd = [
+                'ffmpeg', '-y', '-i', temp_audio_path,
+                '-ar', '16000',  # 16kHz 采样率
+                '-ac', '1',      # 单声道
+                '-f', 'wav',     # WAV 格式
+                audio_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                logger.error(f"[{self.avatar_id}] FFmpeg conversion failed: {result.stderr}")
+                raise RuntimeError(f"Audio conversion failed: {result.stderr}")
+            logger.info(f"[{self.avatar_id}] ✅ Audio converted to WAV: {audio_path}")
+        finally:
+            # 删除临时文件
+            try:
+                os.unlink(temp_audio_path)
+            except:
+                pass
 
         try:
             # 2. 提取 Whisper 特征

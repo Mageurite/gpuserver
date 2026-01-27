@@ -59,7 +59,7 @@ Virtual Tutor System - A multi-tenant AI-powered virtual tutor platform built on
 │   ├── config.py                  # Environment configuration
 │   └── start_server.sh            # Server startup script (uses rag env)
 ├── MuseTalk/               # Video generation model (uses mt env)
-├── try/                    # Reference implementations (DO NOT MODIFY)
+├── virtual-tutor/                    # Reference implementations (DO NOT MODIFY)
 │   ├── llm/                # LLM reference code (uses rag env)
 │   ├── rag/                # RAG reference code (uses rag env)
 │   ├── tts/                # TTS reference code (uses tts env)
@@ -424,7 +424,7 @@ Located in `/workspace/MuseTalk/`, this provides lip-sync video generation using
 
 ## Important Constraints
 
-1. **DO NOT modify** code in `try/` directory - it's reference implementation only
+1. **DO NOT modify** code in `virtual-tutor/` directory - it's reference implementation only
 2. **DO NOT modify** Web Server code when working on GPU Server tasks (Web Server is on a separate machine)
 3. **Session isolation**: Each `AIEngine` instance is tied to a specific `tutor_id` for model isolation
 4. **WebRTC port constraints**:
@@ -683,7 +683,7 @@ ss -tulnp | grep -E "(9000|9001|10110)"
 ├── logs/
 └── CLAUDE.md (本文档)
 
-/workspace/try/frontend/       # ⚠️ 参考代码，不能修改！
+/workspace/virtual-tutor/frontend/       # ⚠️ 参考代码，不能修改！
                                # 实际前端在Web服务器上（另一台服务器）
 ```
 

@@ -207,16 +207,16 @@ async def websocket_endpoint(
         ai_engine = get_ai_engine(session.tutor_id)
         logger.info(f"AI engine initialized for tutor_id={session.tutor_id}")
 
-        # 预热 subprocess 推理引擎（异步，不阻塞）
+        # 预热 realtime 推理引擎（异步，不阻塞）
         # 使用 ai_engine 中的 avatar_manager 实例，确保复用同一个引擎
         avatar_id = f"avatar_tutor_{session.tutor_id}"
         try:
             if hasattr(ai_engine, 'avatar_manager') and ai_engine.avatar_manager:
-                ai_engine.avatar_manager.warmup_subprocess_engine(avatar_id)
+                ai_engine.avatar_manager.warmup_realtime_engine(avatar_id)
             else:
                 logger.warning(f"AI engine does not have avatar_manager, skipping warmup")
         except Exception as e:
-            logger.warning(f"Failed to warmup subprocess engine for {avatar_id}: {e}")
+            logger.warning(f"Failed to warmup realtime engine for {avatar_id}: {e}")
 
     # 自动发送待机视频（如果启用了 Avatar）
     # 注意：在 user-based 模式下，可能需要等待第一条消息来确定 avatar_id
@@ -275,16 +275,16 @@ async def websocket_endpoint(
                         ai_engine = get_ai_engine(tutor_id)
                         logger.info(f"AI engine created dynamically for tutor_id={tutor_id}")
 
-                        # 预热 subprocess 推理引擎（异步，不阻塞）
+                        # 预热 realtime 推理引擎（异步，不阻塞）
                         # 使用 ai_engine 中的 avatar_manager 实例，确保复用同一个引擎
                         avatar_id = f"avatar_tutor_{tutor_id}"
                         try:
                             if hasattr(ai_engine, 'avatar_manager') and ai_engine.avatar_manager:
-                                ai_engine.avatar_manager.warmup_subprocess_engine(avatar_id)
+                                ai_engine.avatar_manager.warmup_realtime_engine(avatar_id)
                             else:
                                 logger.warning(f"AI engine does not have avatar_manager, skipping warmup")
                         except Exception as e:
-                            logger.warning(f"Failed to warmup subprocess engine for {avatar_id}: {e}")
+                            logger.warning(f"Failed to warmup realtime engine for {avatar_id}: {e}")
 
                     # 直接处理消息（无 session）
                     await handle_message(websocket, None, message, ai_engine, is_user_based)
@@ -346,6 +346,190 @@ async def websocket_endpoint(
             logger.info(f"Connection cleaned up (session-based): connection_id={connection_id}")
 
 
+# ============== 照搬 try 的全局预加载 ==============
+# 全局变量 - 模型只加载一次
+_global_model = None  # (vae, unet, pe, timesteps, audio_processor)
+_global_model_loaded = False
+
+# 全局 Avatar 缓存
+_avatar_cache: Dict[str, tuple] = {}  # avatar_id -> (frame_list, mask_list, coord_list, ...)
+
+# 全局 MuseReal 引擎缓存
+_muse_real_engines: Dict[str, 'MuseRealEngine'] = {}
+
+
+def load_global_model():
+    """服务启动时预加载模型 - 照搬 try/lip-sync/app.py"""
+    global _global_model, _global_model_loaded
+    
+    if _global_model_loaded:
+        return _global_model
+    
+    logger.info("[Startup] Loading MuseTalk models...")
+    import sys
+    musetalk_base = os.environ.get('MUSETALK_BASE', '/workspace/MuseTalk')
+    
+    # 清理 sys.modules 中的 musetalk 相关模块（只清理 MuseTalk 的，保留 gpuserver 的）
+    mods_to_remove = [k for k in sys.modules.keys() 
+                      if (k == 'musetalk' or k.startswith('musetalk.')) 
+                      and 'streaming_engine' not in k 
+                      and 'avatar_manager' not in k
+                      and 'realtime_engine' not in k]
+    for mod in mods_to_remove:
+        del sys.modules[mod]
+    
+    # 把 MuseTalk 放到 sys.path 最前面
+    sys.path = [musetalk_base] + [p for p in sys.path if p != musetalk_base]
+    
+    old_cwd = os.getcwd()
+    os.chdir(musetalk_base)
+    
+    try:
+        import torch
+        from musetalk.utils.utils import load_all_model
+        from musetalk.whisper.audio2feature import Audio2Feature
+        
+        # 加载模型
+        unet_path = os.path.join(musetalk_base, "models", "musetalkV15", "unet.pth")
+        unet_config = os.path.join(musetalk_base, "models", "musetalkV15", "musetalk.json")
+        vae, unet, pe = load_all_model(
+            unet_model_path=unet_path,
+            unet_config=unet_config
+        )
+        
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        timesteps = torch.tensor([0], device=device)
+        
+        # 加载 audio_processor
+        audio_processor = Audio2Feature(
+            whisper_model_type="tiny",
+            model_path="tiny"
+        )
+        
+        # 转换为半精度
+        pe = pe.half()
+        vae.vae = vae.vae.half()
+        unet.model = unet.model.half()
+        
+        _global_model = (vae, unet, pe, timesteps, audio_processor)
+        _global_model_loaded = True
+        
+        logger.info(f"[Startup] ✅ Models loaded on {device}")
+        
+        # 预热 - 照搬 try (batch_size=16)
+        logger.info("[Startup] Warming up model...")
+        batch_size = 16
+        whisper_batch = np.ones((batch_size, 50, 384), dtype=np.uint8)
+        latent_batch = torch.ones(batch_size, 8, 32, 32).to(unet.device)
+        
+        audio_feature_batch = torch.from_numpy(whisper_batch)
+        audio_feature_batch = audio_feature_batch.to(device=unet.device, dtype=unet.model.dtype)
+        audio_feature_batch = pe(audio_feature_batch)
+        latent_batch = latent_batch.to(dtype=unet.model.dtype)
+        
+        with torch.no_grad():
+            pred_latents = unet.model(latent_batch, timesteps, encoder_hidden_states=audio_feature_batch).sample
+            vae.decode_latents(pred_latents)
+        
+        logger.info("[Startup] ✅ Model warmed up")
+        
+    finally:
+        os.chdir(old_cwd)
+    
+    return _global_model
+
+
+def load_avatar_data(avatar_id: str):
+    """加载 Avatar 数据（带缓存）"""
+    global _avatar_cache
+    
+    if avatar_id in _avatar_cache:
+        return _avatar_cache[avatar_id]
+    
+    logger.info(f"[Avatar] Loading {avatar_id}...")
+    import glob
+    import pickle
+    import torch
+    
+    avatar_path = f"/workspace/gpuserver/data/avatars/{avatar_id}"
+    full_imgs_path = os.path.join(avatar_path, "full_imgs")
+    coords_path = os.path.join(avatar_path, "coords.pkl")
+    latents_path = os.path.join(avatar_path, "latents.pt")
+    mask_path = os.path.join(avatar_path, "mask")
+    mask_coords_path = os.path.join(avatar_path, "mask_coords.pkl")
+    
+    # 加载 latents
+    input_latent_list_cycle = torch.load(latents_path)
+    
+    # 加载 coords
+    with open(coords_path, 'rb') as f:
+        coord_list_cycle = pickle.load(f)
+    
+    # 加载图像
+    input_img_list = glob.glob(os.path.join(full_imgs_path, '*.[jpJP][pnPN]*[gG]'))
+    input_img_list = sorted(input_img_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
+    frame_list_cycle = [cv2.imread(img) for img in input_img_list]
+    
+    # 加载 mask coords
+    with open(mask_coords_path, 'rb') as f:
+        mask_coords_list_cycle = pickle.load(f)
+    
+    # 加载 masks
+    input_mask_list = glob.glob(os.path.join(mask_path, '*.[jpJP][pnPN]*[gG]'))
+    input_mask_list = sorted(input_mask_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
+    mask_list_cycle = [cv2.imread(img) for img in input_mask_list]
+    
+    avatar_data = (frame_list_cycle, mask_list_cycle, coord_list_cycle, 
+                   mask_coords_list_cycle, input_latent_list_cycle)
+    _avatar_cache[avatar_id] = avatar_data
+    
+    logger.info(f"[Avatar] ✅ {avatar_id} loaded: {len(frame_list_cycle)} frames")
+    return avatar_data
+
+
+def get_muse_real_engine(avatar_id: str):
+    """获取或创建 MuseReal 引擎 - 使用预加载的模型"""
+    global _muse_real_engines
+    
+    # 确保模型已加载
+    model = load_global_model()
+    avatar = load_avatar_data(avatar_id)
+    
+    if avatar_id not in _muse_real_engines:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "gpuserver_base_real",
+            "/workspace/gpuserver/musetalk/base_real.py"
+        )
+        base_real_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(base_real_module)
+        MuseRealEngine = base_real_module.MuseRealEngine
+        
+        # 创建引擎，传入预加载的模型和 avatar
+        # batch_size=2 最小化首帧延迟
+        engine = MuseRealEngine(
+            avatar_id=avatar_id, 
+            batch_size=2, 
+            fps=50,
+            model=model,  # 传入预加载的模型
+            avatar=avatar  # 传入预加载的 avatar
+        )
+        
+        # 设置 ASR
+        engine.setup_asr()
+        
+        # 设置 TTS - 使用配置中的语速
+        from config import settings
+        tts_rate = getattr(settings, 'tts_rate', '+30%')
+        tts_pitch = getattr(settings, 'tts_pitch', '+0Hz')
+        engine.setup_tts(voice="zh-CN-XiaoxiaoNeural", rate=tts_rate, pitch=tts_pitch)
+        
+        _muse_real_engines[avatar_id] = engine
+        logger.info(f"Created MuseRealEngine for {avatar_id}")
+    
+    return _muse_real_engines[avatar_id]
+
+
 async def stream_audio_video(
     ai_engine,
     text: str,
@@ -354,71 +538,97 @@ async def stream_audio_video(
     websocket: WebSocket
 ):
     """
-    并行处理音视频生成和推送（逐帧流式）
+    照搬 try 架构的流处理 - 完全并行
     
-    架构（参考 virtual-tutor）:
-    1. TTS 生成音频
-    2. MuseTalk realtime_engine 生成帧 → res_frame_queue
-    3. process_frames 线程: res_frame_queue → video_track.frame_queue
-    4. WebRTC track.recv(): frame_queue → 客户端
+    架构：
+    1. TTS 线程接收文本，生成音频，调用 engine.put_audio_frame()
+    2. ASR 主循环调用 run_step()，生成特征
+    3. 推理线程消费特征，生成视频帧
+    4. 处理线程推送到 WebRTC
     
-    Args:
-        ai_engine: AI 引擎实例
-        text: 完整文本
-        avatar_id: Avatar ID
-        user_id: 用户 ID
-        websocket: WebSocket 连接（用于错误通知）
+    所有线程并行运行！
     """
     try:
         streamer = get_webrtc_streamer()
         session_id = f"user_{user_id}"
         
-        # 获取 video_track（WebRTC track）
+        # 获取 tracks
         if session_id not in streamer.video_tracks:
             logger.error(f"No video track found for session {session_id}")
             await send_error(websocket, "WebRTC connection not established")
             return
         
         video_track = streamer.video_tracks[session_id]
+        audio_track = streamer.audio_tracks.get(session_id)
         
-        # ====== 阶段2: TTS 生成（完整音频）======
-        logger.info(f"[Pipeline] Stage 2: TTS generation...")
-        audio_data = await ai_engine.synthesize_speech(text)
-        logger.info(f"[Pipeline] Stage 2 complete: audio_length={len(audio_data)}")
+        if not audio_track:
+            logger.error(f"No audio track found for session {session_id}")
+            await send_error(websocket, "WebRTC audio track not established")
+            return
         
-        # ====== 阶段3: 启动 realtime_engine 生成帧到 res_frame_queue ======
-        logger.info(f"[Pipeline] Stage 3: Starting realtime frame generation...")
+        # 获取 MuseReal 引擎
+        muse_engine = get_muse_real_engine(avatar_id)
         
-        # 先启动视频生成，等第一帧出现后再启动音频（实现音视频同步）
-        audio_task = None
-        audio_started = False
+        # 每次请求都重新启动引擎（用新的 tracks）
+        # 照搬 try：每个 WebRTC 连接有自己的处理循环
+        if muse_engine.render_event.is_set():
+            # 先停止旧的线程
+            muse_engine.stop()
+            # 等待线程完全停止
+            await asyncio.sleep(0.5)
         
-        frame_count = 0
-        async for frame in ai_engine.video_engine.generate_frames_stream(
-            audio_data=audio_data, avatar_id=avatar_id, fps=25
-        ):
-            # 在推送第一帧视频时，同时启动音频推送（实现音视频同步）
-            if not audio_started:
-                audio_task = asyncio.create_task(
-                    streamer.stream_audio(session_id, audio_data)
-                )
-                audio_started = True
-                logger.info(f"[Pipeline] 🔊 Audio streaming started (synchronized with first video frame)")
+        # 启动引擎
+        loop = asyncio.get_event_loop()
+        muse_engine.start(loop, audio_track, video_track)
+        
+        logger.info(f"[Pipeline] Sending text to TTS: {text[:50]}...")
+        
+        # 发送文本到 TTS 队列（非阻塞）
+        muse_engine.put_msg_txt(text)
+        
+        # 照搬 try 的架构：ASR 主循环持续运行
+        # try 中 render() 的主循环一直运行直到 quit_event
+        logger.info("[Pipeline] Starting ASR loop...")
+        
+        t_start = time.time()
+        max_time = 120  # 最多运行 120 秒
+        tts_done = False
+        tts_done_time = None
+        
+        # 照搬 try 的 render() 主循环
+        while time.time() - t_start < max_time:
+            # 运行一步 ASR - 这会处理 batch_size*2 个音频帧
+            muse_engine.asr.run_step()
             
-            # 直接将帧推送到 video_track 的 frame_queue
-            await video_track.frame_queue.put(frame)
-            frame_count += 1
-            if frame_count == 1:
-                logger.info(f"[Pipeline] ⚡ First frame pushed to WebRTC queue")
-            if frame_count % 20 == 0:
-                logger.info(f"[Pipeline] 📤 Pushed {frame_count} frames to WebRTC (qsize={video_track.frame_queue.qsize()})")
+            # 背压控制 - 照搬 try
+            qsize = video_track._queue.qsize()
+            if qsize >= 1.5 * muse_engine.batch_size:
+                await asyncio.sleep(0.04 * qsize * 0.8)
+            
+            # 检查 TTS 是否完成
+            if not tts_done and muse_engine.tts and muse_engine.tts.msgqueue.empty():
+                # TTS 队列空了，记录时间
+                if muse_engine.asr.input_queue.empty():
+                    if tts_done_time is None:
+                        tts_done_time = time.time()
+                        logger.info("[Pipeline] TTS done, waiting for processing...")
+                    # TTS 完成后等待足够时间让推理和处理完成
+                    # 检查 res_frame_queue 和 video_track._queue
+                    elif time.time() - tts_done_time > 5:  # 等待 5 秒
+                        if (muse_engine.res_frame_queue.empty() and 
+                            video_track._queue.qsize() < 5):
+                            logger.info("[Pipeline] All queues drained")
+                            tts_done = True
+                            # 再运行几步处理尾部
+                            for _ in range(muse_engine.batch_size * 4):
+                                muse_engine.asr.run_step()
+                                await asyncio.sleep(0.02)
+                            break
+            
+            # 让出控制权
+            await asyncio.sleep(0.001)
         
-        logger.info(f"[Pipeline] Stage 3 complete: {frame_count} frames generated")
-        
-        # 等待音频完成
-        if audio_task:
-            await audio_task
-        logger.info(f"[Pipeline] ✅ Complete: {frame_count} frames, audio delivered")
+        logger.info(f"[Pipeline] ✅ Complete: {time.time() - t_start:.2f}s")
         
     except Exception as e:
         logger.error(f"[Pipeline] ❌ Failed: {e}", exc_info=True)
@@ -481,6 +691,19 @@ async def handle_message(websocket: WebSocket, session, message: dict, ai_engine
             # 发送响应
             await send_message(websocket, response_message)
             logger.info("Idle video sent successfully")
+            
+            # 后台预加载 MuseRealEngine（避免首次请求延迟）
+            def preload_engine():
+                try:
+                    logger.info(f"[Preload] Starting MuseRealEngine preload for {avatar_id}...")
+                    engine = get_muse_real_engine(avatar_id)
+                    logger.info(f"[Preload] MuseRealEngine ready for {avatar_id}")
+                except Exception as e:
+                    logger.warning(f"[Preload] Failed to preload MuseRealEngine: {e}")
+            
+            import threading
+            preload_thread = threading.Thread(target=preload_engine, daemon=True)
+            preload_thread.start()
 
         elif msg_type == "text_webrtc":
             # 处理文本消息 - WebRTC 实时流式传输模式（三阶段流式 Pipeline）
@@ -789,6 +1012,18 @@ async def send_error(websocket: WebSocket, error: str):
 
 def main():
     """启动 WebSocket 服务"""
+    # 照搬 try：服务启动时预加载模型
+    logger.info("=" * 50)
+    logger.info("Starting GPU Server...")
+    logger.info("=" * 50)
+    
+    try:
+        load_global_model()
+        logger.info("✅ Global model ready")
+    except Exception as e:
+        logger.error(f"❌ Failed to load global model: {e}")
+        # 继续启动，让后续请求时再加载
+    
     uvicorn.run(
         app,
         host=settings.websocket_host,

@@ -52,191 +52,241 @@ def get_webrtc_config():
     return _config
 
 
+# 全局共享启动时间 - 确保音视频同步
+_shared_start_time = None
+# 全局数据就绪事件 - 当 process_frames_worker 开始推送时设置
+_data_ready_event = None
+# 是否已触发同步
+_sync_triggered = False
+
+
+def trigger_av_sync():
+    """触发音视频同步 - 由 process_frames_worker 在推送第一帧时调用"""
+    global _shared_start_time, _data_ready_event, _sync_triggered
+    
+    if _sync_triggered:
+        return
+    
+    _sync_triggered = True
+    _shared_start_time = time.time()
+    
+    if _data_ready_event:
+        # 使用 call_soon_threadsafe 在事件循环中设置事件
+        try:
+            loop = asyncio.get_event_loop()
+            loop.call_soon_threadsafe(_data_ready_event.set)
+        except:
+            pass
+    
+    logger.info(f"🎬 AV sync triggered at {_shared_start_time}")
+
+
 class AvatarVideoTrack(VideoStreamTrack):
     """
-    Custom video track that streams avatar frames in real-time
-    参考: virtual-tutor/lip-sync/webrtc.py PlayerStreamTrack
+    Custom video track - 完全照搬 try/lip-sync/webrtc.py PlayerStreamTrack
+    
+    关键改动：
+    1. 队列存储 (frame, eventpoint) 元组
+    2. next_timestamp() 控制帧率
+    3. recv() 使用 sleep 等待，保持节奏
+    4. 与 AvatarAudioTrack 共享 _start 时间确保同步
     """
 
     def __init__(self, idle_frames=None):
         super().__init__()
-        self.frame_queue = asyncio.Queue(maxsize=30)  # Buffer up to 30 frames
-        self._timestamp = 0
-        self._frame_count = 0
-        self._start_time = None  # 开始时间
-        self.current_frame_count = 0  # 当前帧计数
-        self.idle_frames = idle_frames or []  # 待机视频帧列表
-        self.idle_frame_index = 0  # 当前待机帧索引
-        self.is_streaming = False  # 是否正在流式传输对话视频
+        # 队列存储 (frame, eventpoint) 元组 - 照搬 try
+        self._queue = asyncio.Queue()
         
-        # 时间常量（参考 virtual-tutor）
-        self.VIDEO_PTIME = 1 / 25  # 25fps = 40ms per frame
+        self._timestamp = None
+        self._start = None
+        self.current_frame_count = 0
+        
+        self.idle_frames = idle_frames or []
+        self.idle_frame_index = 0
+        
+        # 时间常量 - 与 try 完全一致
+        self.VIDEO_PTIME = 0.040  # 40ms = 25fps
         self.VIDEO_CLOCK_RATE = 90000
+        self.VIDEO_TIME_BASE = fractions.Fraction(1, self.VIDEO_CLOCK_RATE)
+        
+        # 统计
+        self.framecount = 0
+        self.lasttime = time.perf_counter()
+        self.totaltime = 0
+        
+        # 数据开始标志 - 收到实际数据前不推进时间戳
+        self._data_started = False
 
+    async def next_timestamp(self):
+        """
+        计算下一帧的时间戳
+        """
+        global _shared_start_time
+        
+        # 如果还没收到实际数据，等待并返回时间戳 0
+        if not self._data_started:
+            await asyncio.sleep(self.VIDEO_PTIME)
+            return 0, self.VIDEO_TIME_BASE
+        
+        if self._timestamp is not None:
+            self._timestamp += int(self.VIDEO_PTIME * self.VIDEO_CLOCK_RATE)
+            self.current_frame_count += 1
+            
+            # 计算需要等待的时间
+            wait = self._start + self.current_frame_count * self.VIDEO_PTIME - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+        else:
+            # 使用共享启动时间确保音视频同步
+            self._start = _shared_start_time if _shared_start_time else time.time()
+            self._timestamp = 0
+            logger.info(f"📺 Video track sync start: {self._start}")
+        
+        return self._timestamp, self.VIDEO_TIME_BASE
+    
     async def recv(self):
         """
-        Receive next video frame
-        简化版本：让 aiortc 自己控制帧率，我们只负责提供帧数据
-        
-        Returns:
-            VideoFrame: Next frame to send to client
+        接收下一帧 - 收到实际数据前用 idle frame，收到后开始同步
         """
+        # 尝试从队列获取帧
         try:
-            # 尝试从队列获取帧（非阻塞，短超时）
-            frame_data = await asyncio.wait_for(
-                self.frame_queue.get(),
-                timeout=0.04  # 40ms = 25fps
-            )
-
-            if frame_data is None:
-                # End of stream signal
-                raise StopAsyncIteration
-
-            # 标记为正在流式传输
-            if not self.is_streaming:
-                logger.info(f"📺 WebRTC track: Started streaming generated frames")
-                self.is_streaming = True
-
-            # Convert numpy array to VideoFrame
-            frame = VideoFrame.from_ndarray(frame_data, format="bgr24")
-            frame.pts = self._timestamp
-            frame.time_base = fractions.Fraction(1, 90000)  # 标准 RTP 时钟频率
+            item = self._queue.get_nowait()
             
-            # 递增 timestamp（每帧 +3600 = 40ms @ 90kHz）
-            self._timestamp += 3600
-            self._frame_count += 1
-            
-            if self._frame_count % 20 == 0:
-                logger.info(f"📺 WebRTC track: Sent {self._frame_count} frames (qsize={self.frame_queue.qsize()})")
-
-            return frame
-
-        except asyncio.TimeoutError:
-            # 队列为空，使用待机视频帧
-            if self.idle_frames and len(self.idle_frames) > 0:
-                # 循环播放待机视频
-                idle_frame = self.idle_frames[self.idle_frame_index]
-                self.idle_frame_index = (self.idle_frame_index + 1) % len(self.idle_frames)
-
-                frame = VideoFrame.from_ndarray(idle_frame, format="bgr24")
-                frame.pts = self._timestamp
-                frame.time_base = fractions.Fraction(1, 90000)
-                self._timestamp += 3600  # 40ms @ 90kHz
-
-                # 如果之前在流式传输，现在切换回待机
-                if self.is_streaming:
-                    logger.info("Switching back to idle video")
-                    self.is_streaming = False
-
-                return frame
+            if isinstance(item, tuple):
+                frame, eventpoint = item
             else:
-                # 没有待机帧，发送黑屏
-                black_frame = np.zeros((512, 512, 3), dtype=np.uint8)
-                frame = VideoFrame.from_ndarray(black_frame, format="bgr24")
-                frame.pts = self._timestamp
-                frame.time_base = fractions.Fraction(1, 90000)
-                self._timestamp += 3600
-                return frame
-
-    async def add_frame(self, frame: np.ndarray):
-        """
-        Add a frame to the streaming queue
-
-        Args:
-            frame: numpy array (H, W, 3) in BGR format
-        """
-        try:
-            await self.frame_queue.put(frame)
-        except asyncio.QueueFull:
-            logger.warning("Frame queue full, dropping frame")
+                frame = item
+            
+            if frame is not None:
+                # 收到实际数据，标记开始
+                if not self._data_started:
+                    self._data_started = True
+                    logger.info("📺 Video: First real frame received, starting sync")
+            else:
+                frame = self._get_idle_frame()
+            
+        except asyncio.QueueEmpty:
+            frame = self._get_idle_frame()
+        
+        # 计算时间戳
+        pts, time_base = await self.next_timestamp()
+        frame.pts = pts
+        frame.time_base = time_base
+        
+        # 统计 FPS
+        self.totaltime += (time.perf_counter() - self.lasttime)
+        self.framecount += 1
+        self.lasttime = time.perf_counter()
+        
+        if self.framecount == 100:
+            logger.info(f"📺 Video avg fps: {self.framecount/self.totaltime:.2f}")
+            self.framecount = 0
+            self.totaltime = 0
+        
+        return frame
+    
+    def _get_idle_frame(self):
+        """获取 idle frame"""
+        if self.idle_frames and len(self.idle_frames) > 0:
+            idle_frame = self.idle_frames[self.idle_frame_index]
+            self.idle_frame_index = (self.idle_frame_index + 1) % len(self.idle_frames)
+            return VideoFrame.from_ndarray(idle_frame, format="bgr24")
+        else:
+            return VideoFrame.from_ndarray(np.zeros((512, 512, 3), dtype=np.uint8), format="bgr24")
 
     def set_idle_frames(self, frames: list):
-        """
-        Set idle video frames for looping
-
-        Args:
-            frames: List of numpy arrays (H, W, 3) in BGR format
-        """
+        """设置待机帧"""
         self.idle_frames = frames
         self.idle_frame_index = 0
         logger.info(f"Set {len(frames)} idle frames for WebRTC track")
-
+    
     async def end_stream(self):
-        """Signal end of stream"""
-        await self.frame_queue.put(None)
+        """结束流"""
+        await self._queue.put((None, None))
 
 
 class AvatarAudioTrack(AudioStreamTrack):
     """
-    Custom audio track that streams TTS audio in real-time
-    参考: virtual-tutor/lip-sync/webrtc.py PlayerStreamTrack (audio)
+    Audio track - 照搬 try/lip-sync/webrtc.py PlayerStreamTrack (audio)
     """
 
     def __init__(self):
         super().__init__()
-        self.frame_queue = asyncio.Queue(maxsize=200)  # 缓冲约 4 秒
-        self._timestamp = 0
-        self._sample_rate = 48000  # WebRTC 标准采样率
-        self._samples_per_frame = 960  # 20ms @ 48kHz
-        self._start_time = None
-        self.current_frame_count = 0
-        self.AUDIO_PTIME = 0.020  # 20ms audio packetization
-
-    async def recv(self):
-        """
-        Receive next audio frame (每 20ms 调用一次)
-        简化版本：让 aiortc 自己控制帧率
+        # 队列存储 (frame, eventpoint) 元组 - 照搬 try
+        self._queue = asyncio.Queue()
         
-        Returns:
-            AudioFrame: 960 samples @ 48kHz, s16, mono
-        """
-        try:
-            # 尝试从队列获取音频数据
-            audio_samples = await asyncio.wait_for(
-                self.frame_queue.get(),
-                timeout=0.02  # 20ms
-            )
-
-            if audio_samples is None:
-                # End of stream signal
-                raise StopAsyncIteration
-
-            # 创建 AudioFrame
-            frame = AudioFrame(format='s16', layout='mono', samples=self._samples_per_frame)
-            frame.sample_rate = self._sample_rate
-            frame.pts = self._timestamp
-            frame.time_base = fractions.Fraction(1, self._sample_rate)
-
-            # 填充音频数据
-            frame.planes[0].update(audio_samples.tobytes())
+        self._timestamp = None
+        self._start = None
+        self.current_frame_count = 0
+        
+        # 时间常量 - 与 try 完全一致
+        self.AUDIO_PTIME = 0.020  # 20ms
+        self.SAMPLE_RATE = 16000
+        self.AUDIO_TIME_BASE = fractions.Fraction(1, self.SAMPLE_RATE)
+        
+        # 数据开始标志 - 收到实际数据前不推进时间戳
+        self._data_started = False
+    
+    async def next_timestamp(self):
+        """计算下一帧的时间戳 - 与视频同步"""
+        global _shared_start_time
+        
+        # 如果还没收到实际数据，等待并返回时间戳 0
+        if not self._data_started:
+            await asyncio.sleep(self.AUDIO_PTIME)
+            return 0, self.AUDIO_TIME_BASE
+        
+        if self._timestamp is not None:
+            self._timestamp += int(self.AUDIO_PTIME * self.SAMPLE_RATE)
+            self.current_frame_count += 1
             
-            # 递增 timestamp
-            self._timestamp += self._samples_per_frame
-
-            return frame
-
-        except asyncio.TimeoutError:
-            # 队列为空,发送静音帧
-            silence = np.zeros(self._samples_per_frame, dtype=np.int16)
-            frame = AudioFrame(format='s16', layout='mono', samples=self._samples_per_frame)
-            frame.sample_rate = self._sample_rate
-            frame.pts = self._timestamp
-            frame.time_base = fractions.Fraction(1, self._sample_rate)
-            frame.planes[0].update(silence.tobytes())
-            self._timestamp += self._samples_per_frame
-            return frame
-
-    async def add_audio_chunk(self, audio_samples: np.ndarray):
-        """
-        Add audio samples to the streaming queue
-
-        Args:
-            audio_samples: numpy array (960,) dtype=int16
-        """
+            # 计算需要等待的时间
+            wait = self._start + self.current_frame_count * self.AUDIO_PTIME - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+        else:
+            # 使用共享启动时间确保音视频同步
+            self._start = _shared_start_time if _shared_start_time else time.time()
+            self._timestamp = 0
+            logger.info(f"🔊 Audio track sync start: {self._start}")
+        
+        return self._timestamp, self.AUDIO_TIME_BASE
+    
+    async def recv(self):
+        """接收下一个音频帧 - 收到实际数据前用静音，收到后开始同步"""
+        # 尝试从队列获取帧
         try:
-            await self.frame_queue.put(audio_samples)
-        except asyncio.QueueFull:
-            logger.warning("Audio queue full, dropping chunk")
+            item = self._queue.get_nowait()
+            
+            if isinstance(item, tuple):
+                frame, eventpoint = item
+            else:
+                frame = item
+            
+            if frame is not None:
+                # 收到实际数据，标记开始
+                if not self._data_started:
+                    self._data_started = True
+                    logger.info("🔊 Audio: First real frame received, starting sync")
+            else:
+                frame = self._get_silence_frame()
+            
+        except asyncio.QueueEmpty:
+            frame = self._get_silence_frame()
+        
+        # 计算时间戳
+        pts, time_base = await self.next_timestamp()
+        frame.pts = pts
+        frame.time_base = time_base
+        return frame
+    
+    def _get_silence_frame(self):
+        """获取静音帧"""
+        silence = np.zeros(320, dtype=np.int16)
+        frame = AudioFrame(format='s16', layout='mono', samples=320)
+        frame.planes[0].update(silence.tobytes())
+        frame.sample_rate = 16000
+        return frame
 
 
 class WebRTCStreamer:
@@ -265,18 +315,25 @@ class WebRTCStreamer:
         Returns:
             RTCPeerConnection: New peer connection
         """
+        # 重置共享启动时间和数据就绪事件 - 确保每个新连接的音视频同步
+        global _shared_start_time, _data_ready_event, _sync_triggered
+        _shared_start_time = None
+        _data_ready_event = asyncio.Event()
+        _sync_triggered = False
+        
         # 获取WebRTC配置
         config = get_webrtc_config()
 
         # 配置 TURN 服务器
-        # ⚠️ 修改：GPU服务器也使用公网TURN地址（实测可以连接）
-        # 这样GPU服务器和前端都使用相同的TURN服务器地址
+        # ⚠️ 关键：GPU服务器必须使用本地 TURN 地址 (127.0.0.1)
+        # 因为 GPU 服务器在 Docker 容器内，无法从内部连接到自己的公网 IP
+        local_turn = config['turn_server_local']  # turn:127.0.0.1:10110
         ice_servers = [
             RTCIceServer(
                 urls=[config['stun_server']],
             ),
             RTCIceServer(
-                urls=[config['turn_server']],  # 使用公网TURN地址
+                urls=[local_turn],  # 使用本地 TURN 地址
                 username=config['turn_username'],
                 credential=config['turn_password']
             )
@@ -289,10 +346,10 @@ class WebRTCStreamer:
 
         logger.info(f"WebRTC configuration for session {session_id}:")
         logger.info(f"  STUN server: {config['stun_server']}")
-        logger.info(f"  TURN server: {config['turn_server']} (public, used by both frontend and GPU server)")
+        logger.info(f"  TURN server (GPU local): {local_turn}")
+        logger.info(f"  TURN server (frontend): {config['turn_server']}")
         logger.info(f"  TURN username: {config['turn_username']}")
         logger.info(f"  Port range: {config['port_min']}-{config['port_max']}")
-        logger.info(f"  Note: GPU server uses local TURN, frontend uses public TURN")
 
         pc = RTCPeerConnection(configuration=configuration)
         self.connections[session_id] = pc
@@ -454,7 +511,15 @@ class WebRTCStreamer:
         Returns:
             str: SDP answer
         """
-        # Create peer connection if not exists
+        # Check if connection exists and is still open
+        if session_id in self.connections:
+            pc = self.connections[session_id]
+            # If connection is closed, clean it up first
+            if pc.connectionState == "closed" or pc.signalingState == "closed":
+                logger.info(f"Cleaning up closed connection for session {session_id}")
+                await self.close_connection(session_id)
+        
+        # Create peer connection if not exists (or was just cleaned up)
         if session_id not in self.connections:
             await self.create_peer_connection(session_id, idle_frames=idle_frames, websocket=websocket)
 
@@ -549,9 +614,57 @@ class WebRTCStreamer:
         else:
             logger.warning(f"No video track found for session {session_id}")
 
+    async def prepare_audio_chunks(self, audio_base64: str) -> list:
+        """
+        预先准备音频 chunks（用于同步推送）
+        与 try 的实现保持一致：16kHz, 320 samples/chunk
+
+        Args:
+            audio_base64: base64 encoded audio (MP3 or WAV)
+
+        Returns:
+            list: 音频 chunk 列表，每个 chunk 是 320 samples (20ms @ 16kHz) 的 numpy array
+        """
+        try:
+            # 解码 base64
+            audio_bytes = base64.b64decode(audio_base64)
+
+            # 使用 PyAV 解码音频
+            container = av.open(io.BytesIO(audio_bytes))
+            audio_stream = container.streams.audio[0]
+
+            # 重采样到 16kHz, s16, mono（与 try 保持一致）
+            resampler = av.audio.resampler.AudioResampler(
+                format='s16',
+                layout='mono',
+                rate=16000  # 16kHz
+            )
+
+            chunks = []
+            for packet in container.demux(audio_stream):
+                for frame in packet.decode():
+                    # 重采样
+                    resampled_frames = resampler.resample(frame)
+
+                    for resampled_frame in resampled_frames:
+                        # 转换为 numpy array
+                        audio_data = resampled_frame.to_ndarray()[0]  # (samples,)
+
+                        # 分块为 320 samples (20ms @ 16kHz)
+                        for i in range(0, len(audio_data), 320):
+                            chunk = audio_data[i:i+320]
+                            if len(chunk) == 320:
+                                chunks.append(chunk)
+
+            return chunks
+
+        except Exception as e:
+            logger.error(f"Failed to prepare audio chunks: {e}", exc_info=True)
+            return []
+
     async def stream_audio(self, session_id: str, audio_base64: str):
         """
-        Stream audio to WebRTC audio track
+        Stream audio to WebRTC audio track（独立推送，用于非同步场景）
 
         Args:
             session_id: Session identifier
@@ -562,46 +675,22 @@ class WebRTCStreamer:
             return
 
         try:
-            # 解码 base64
-            audio_bytes = base64.b64decode(audio_base64)
-
-            # 使用 PyAV 解码音频
-            container = av.open(io.BytesIO(audio_bytes))
-            audio_stream = container.streams.audio[0]
-
-            # 重采样到 48kHz, s16, mono
-            resampler = av.audio.resampler.AudioResampler(
-                format='s16',
-                layout='mono',
-                rate=48000
-            )
-
             audio_track = self.audio_tracks[session_id]
+            logger.info(f"[Audio] Starting audio preparation for {session_id}, audio_base64 length: {len(audio_base64)}")
+            
+            chunks = await self.prepare_audio_chunks(audio_base64)
+            
+            logger.info(f"[Audio] Prepared {len(chunks)} chunks for {session_id}")
+            
+            # 逐个推送 chunks
+            for i, chunk in enumerate(chunks):
+                await audio_track.add_audio_chunk(chunk)
+                if i == 0:
+                    logger.info(f"[Audio] ⚡ First chunk pushed")
+                if (i + 1) % 50 == 0:
+                    logger.info(f"[Audio] 📤 Pushed {i + 1}/{len(chunks)} chunks")
 
-            # 处理所有音频帧
-            chunk_count = 0
-            total_duration = 0.0
-            for packet in container.demux(audio_stream):
-                for frame in packet.decode():
-                    # 重采样
-                    resampled_frames = resampler.resample(frame)
-
-                    for resampled_frame in resampled_frames:
-                        # 转换为 numpy array
-                        audio_data = resampled_frame.to_ndarray()[0]  # (samples,)
-
-                        # 分块为 960 samples (20ms)
-                        for i in range(0, len(audio_data), 960):
-                            chunk = audio_data[i:i+960]
-                            if len(chunk) == 960:
-                                await audio_track.add_audio_chunk(chunk)
-                                chunk_count += 1
-                                # 每个chunk是20ms
-                                total_duration += 0.02
-                                # 添加20ms延迟，让音频推送与实际时长同步
-                                await asyncio.sleep(0.02)
-
-            logger.info(f"Audio streaming completed for session {session_id}: {chunk_count} chunks, {total_duration:.2f}s")
+            logger.info(f"[Audio] ✅ Completed: {len(chunks)} chunks (~{len(chunks) * 20}ms)")
 
         except Exception as e:
             logger.error(f"Failed to stream audio: {e}", exc_info=True)
@@ -633,7 +722,12 @@ class WebRTCStreamer:
             return
         
         if session_id in self.video_tracks:
-            await self.video_tracks[session_id].end_stream()
+            track = self.video_tracks[session_id]
+            if hasattr(track, 'end_stream'):
+                try:
+                    await track.end_stream()
+                except Exception as e:
+                    logger.debug(f"Error ending video stream: {e}")
             del self.video_tracks[session_id]
 
         if session_id in self.audio_tracks:

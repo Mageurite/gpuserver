@@ -1220,6 +1220,31 @@ class AvatarManager:
         thread.start()
         logger.info(f"[Warmup] Background warmup initiated for {avatar_id}")
 
+    def warmup_realtime_engine(self, avatar_id: str):
+        """
+        预热 realtime 推理引擎（异步启动，不阻塞）
+        加载模型和 avatar 数据，避免首次请求时的长延迟（约60秒）
+
+        Args:
+            avatar_id: Avatar ID
+        """
+        import threading
+
+        def warmup_thread():
+            try:
+                logger.info(f"[Warmup] Starting realtime engine for {avatar_id} in background...")
+                self._get_realtime_engine(avatar_id)
+                logger.info(f"[Warmup] ✅ Realtime engine ready for {avatar_id}")
+            except Exception as e:
+                logger.error(f"[Warmup] Failed to start realtime engine for {avatar_id}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+
+        # 在后台线程中启动
+        thread = threading.Thread(target=warmup_thread, daemon=True)
+        thread.start()
+        logger.info(f"[Warmup] Background realtime warmup initiated for {avatar_id}")
+
     async def generate_frames_stream(
         self,
         audio_data: str,
@@ -1253,15 +1278,44 @@ class AvatarManager:
                 yield frame
             return
 
-        # 启用实时推理引擎（直接在主进程中运行，像 virtual-tutor 一样）
-        # 架构：主进程中使用 threading.Thread 运行推理
-        # 现在 diffusers 已降级到 0.30.2，可以正常导入 MuseTalk
-        use_realtime_engine = True  # ✅ 启用主线程实时引擎
+        # 暂时禁用 subprocess engine，使用主线程版本调试
+        # TODO: 修复后重新启用
+        use_subprocess = False  # avatar_id in self._subprocess_engines
+        if use_subprocess and avatar_id in self._subprocess_engines:
+            try:
+                logger.info(f"[Realtime Streaming] Using prewarmed subprocess engine for: {avatar_id}")
+                engine = self._subprocess_engines[avatar_id]
+                
+                frame_count = 0
+                async for frame_data in engine.generate_frames(audio_data, fps):
+                    # subprocess engine 返回 JPEG bytes，需要解码为 numpy array
+                    if isinstance(frame_data, bytes):
+                        import cv2
+                        nparr = np.frombuffer(frame_data, np.uint8)
+                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        if frame is None:
+                            logger.warning(f"Failed to decode frame {frame_count}")
+                            continue
+                    else:
+                        frame = frame_data
+                    
+                    yield frame  # ⚡ 边生成边推流
+                    frame_count += 1
+
+                logger.info(f"[Realtime Streaming] Completed: {frame_count} frames (subprocess)")
+                return
+
+            except Exception as e:
+                logger.error(f"[Subprocess Streaming] Failed: {e}", exc_info=True)
+                logger.warning("Falling back to realtime engine...")
+
+        # 备用方案：使用主进程 realtime engine（会阻塞加载模型）
+        use_realtime_engine = True
 
         if use_realtime_engine:
             try:
                 # 1. 获取实时推理引擎（主进程版本）
-                logger.info(f"[Realtime Streaming] Starting for avatar: {avatar_id}")
+                logger.info(f"[Realtime Streaming] Starting for avatar: {avatar_id} (main process)")
                 engine = self._get_realtime_engine(avatar_id)
 
                 # 2. 实时生成帧流（边生成边推送）

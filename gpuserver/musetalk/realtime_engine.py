@@ -196,9 +196,9 @@ class MuseTalkRealtimeEngine:
         self.batch_size = batch_size
 
         # 队列（使用 Queue，threading 兼容）
-        # 增大容量以避免阻塞（最多支持20个batch）
-        self.audio_feat_queue = Queue(maxsize=20)
-        self.res_frame_queue = Queue(maxsize=batch_size * 10)
+        # 增大容量以避免阻塞（支持50个batch）
+        self.audio_feat_queue = Queue(maxsize=50)
+        self.res_frame_queue = Queue(maxsize=batch_size * 20)
 
         # 控制事件
         self.render_event = Event()
@@ -247,15 +247,21 @@ class MuseTalkRealtimeEngine:
         try:
             logger.info(f"[{self.avatar_id}] Attempting to import musetalk.utils.utils...")
 
-            # 清除可能的模块缓存
+            # 清除可能的模块缓存，并临时调整 sys.path
             import importlib
-            if 'musetalk' in sys.modules:
-                logger.info(f"[{self.avatar_id}] Removing musetalk from sys.modules cache")
-                del sys.modules['musetalk']
-            if 'musetalk.utils' in sys.modules:
-                del sys.modules['musetalk.utils']
-            if 'musetalk.utils.utils' in sys.modules:
-                del sys.modules['musetalk.utils.utils']
+            
+            # 保存原始 sys.path
+            original_sys_path = sys.path.copy()
+            
+            # 清除所有 musetalk 相关的模块缓存
+            mods_to_remove = [k for k in sys.modules.keys() if k == 'musetalk' or k.startswith('musetalk.')]
+            for mod in mods_to_remove:
+                del sys.modules[mod]
+            
+            # 把 MuseTalk 放到 sys.path 最前面
+            sys.path = [self.musetalk_base] + [p for p in sys.path if p != self.musetalk_base]
+            
+            logger.info(f"[{self.avatar_id}] sys.path[0] = {sys.path[0]}")
 
             from musetalk.utils.utils import load_all_model
             from musetalk.whisper.audio2feature import Audio2Feature
@@ -359,21 +365,51 @@ class MuseTalkRealtimeEngine:
         生成帧流（异步）
 
         流程：
-        1. 提取音频特征
-        2. 放入队列
-        3. 从帧队列实时读取并yield
+        1. 解码并转换音频格式（MP3 → WAV）
+        2. 提取 Whisper 特征
+        3. 放入队列
+        4. 从帧队列实时读取并yield
         """
         import base64
         import tempfile
+        import subprocess
+        import soundfile as sf
 
         # 1. 解码音频
         audio_bytes = base64.b64decode(audio_data)
 
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+        # 检测音频格式并转换为 WAV（MuseTalk 需要 WAV 格式）
+        # 先保存原始音频（可能是 MP3 或 WAV）
+        with tempfile.NamedTemporaryFile(suffix='.tmp', delete=False) as f:
             f.write(audio_bytes)
-            audio_path = f.name
+            temp_audio_path = f.name
+
+        # 使用 ffmpeg 转换为 16kHz mono WAV（MuseTalk 要求的格式）
+        audio_path = temp_audio_path.replace('.tmp', '.wav')
+        try:
+            cmd = [
+                'ffmpeg', '-y', '-i', temp_audio_path,
+                '-ar', '16000',  # 16kHz 采样率
+                '-ac', '1',      # 单声道
+                '-f', 'wav',     # WAV 格式
+                audio_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                logger.error(f"[{self.avatar_id}] FFmpeg conversion failed: {result.stderr}")
+                raise RuntimeError(f"Audio conversion failed: {result.stderr}")
+            logger.info(f"[{self.avatar_id}] ✅ Audio converted to WAV: {audio_path}")
+        finally:
+            # 删除临时文件
+            try:
+                os.unlink(temp_audio_path)
+            except:
+                pass
 
         try:
+            # ⚠️ 重要：在开始新请求前清空队列，避免残留帧影响
+            self._clear_queues()
+            
             # 2. 提取 Whisper 特征
             logger.info(f"[{self.avatar_id}] Extracting audio features...")
 
@@ -381,11 +417,11 @@ class MuseTalkRealtimeEngine:
 
             def extract_features():
                 whisper_feature = self.audio_processor.audio2feat(audio_path)
-                # 原始 MuseTalk 的 feature2chunks 不支持 batch_size 参数
-                # 它返回所有的 chunks
+                # 与 try 保持一致：fps=50 → fps/2=25fps
+                # 每帧视频对应 2 个音频 chunks (40ms)
                 return self.audio_processor.feature2chunks(
                     feature_array=whisper_feature,
-                    fps=fps / 2
+                    fps=fps / 2  # fps=50 → 25fps
                 )
 
             whisper_chunks = await loop.run_in_executor(None, extract_features)
@@ -455,6 +491,29 @@ class MuseTalkRealtimeEngine:
 
         finally:
             os.unlink(audio_path)
+
+    def _clear_queues(self):
+        """清空音频和帧队列，避免残留数据影响新请求"""
+        # 清空音频特征队列
+        cleared_audio = 0
+        while not self.audio_feat_queue.empty():
+            try:
+                self.audio_feat_queue.get_nowait()
+                cleared_audio += 1
+            except Empty:
+                break
+        
+        # 清空帧队列
+        cleared_frames = 0
+        while not self.res_frame_queue.empty():
+            try:
+                self.res_frame_queue.get_nowait()
+                cleared_frames += 1
+            except Empty:
+                break
+        
+        if cleared_audio > 0 or cleared_frames > 0:
+            logger.info(f"[{self.avatar_id}] 🧹 Cleared queues: {cleared_audio} audio batches, {cleared_frames} frames")
 
     def stop(self):
         """停止推理线程"""

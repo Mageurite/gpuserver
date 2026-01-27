@@ -8,6 +8,7 @@ Architecture:
 - Avatar Manager: Creates and manages digital avatars
 - Integration with MuseTalk: Calls MuseTalk scripts for avatar creation
 - Video Processing: Handles video upload, processing, and blur
+- Streaming Engine: Real-time TTS + Lip-Sync with low latency
 
 Reference:
 - Full implementation: /workspace/try/lip-sync/
@@ -15,6 +16,15 @@ Reference:
 """
 
 from .avatar_manager import AvatarManager, get_avatar_manager
+
+# 流式引擎（低延迟TTS+Lip-Sync）
+from .streaming_engine import (
+    StreamingLipSyncEngine,
+    StreamingTTSWorker,
+    StreamingASR,
+    get_streaming_engine,
+    warmup_streaming_engine
+)
 
 def get_video_engine(
     enable_real: bool = False,
@@ -32,4 +42,14 @@ def get_video_engine(
         ffmpeg_path=ffmpeg_path
     )
 
-__all__ = ["AvatarManager", "get_avatar_manager", "get_video_engine"]
+__all__ = [
+    "AvatarManager", 
+    "get_avatar_manager", 
+    "get_video_engine",
+    # 流式引擎
+    "StreamingLipSyncEngine",
+    "StreamingTTSWorker", 
+    "StreamingASR",
+    "get_streaming_engine",
+    "warmup_streaming_engine"
+]

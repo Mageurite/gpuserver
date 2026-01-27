@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     tts_voice: str = "zh-CN-XiaoxiaoNeural"
     # 是否启用 TTS（如果为 False，则使用 Mock 模式）
     enable_tts: bool = True
+    # TTS 语速: "+0%" (默认), "+20%" (稍快), "+30%" (快速), "+50%" (很快)
+    tts_rate: str = "+10%"
+    # TTS 音调: "+0Hz" (默认), "+10Hz" (稍高), "-10Hz" (稍低)
+    tts_pitch: str = "+0Hz"
 
     # RAG 配置
     # 是否启用 RAG（如果为 False，则使用 Mock 模式）

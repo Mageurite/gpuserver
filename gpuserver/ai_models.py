@@ -16,7 +16,7 @@ from tts import get_tts_engine
 # Import RAG engine from rag module
 from rag import get_rag_engine
 # Import Video engine from musetalk module
-from musetalk import get_video_engine
+from musetalk import get_video_engine, get_streaming_engine, warmup_streaming_engine
 
 from config import get_settings
 
@@ -72,6 +72,9 @@ class AIEngine:
             avatars_dir=settings.avatars_dir,
             conda_env=settings.musetalk_conda_env
         )
+
+        # 添加 avatar_manager 别名（用于 websocket_server 中的预热调用）
+        self.avatar_manager = self.video_engine
 
         logger.info(f"AI Engine initialized for tutor_id={tutor_id}")
 
@@ -353,6 +356,193 @@ class AIEngine:
             logger.info(f"Audio streaming completed for session {session_id}")
 
         return response_text, audio_data
+
+    async def stream_video_realtime(
+        self,
+        text: str,
+        avatar_id: str,
+        session_id: str,
+        fps: int = 25
+    ):
+        """
+        真正的实时流式处理 - 使用 StreamingLipSyncEngine
+        
+        实现边TTS边生成视频边推流，首帧延迟 < 2秒
+        
+        处理流程（并行）:
+        1. 文本 → TTS Worker → 音频chunks (20ms)
+        2. 音频chunks → ASR → Whisper特征
+        3. Whisper特征 → MuseTalk推理 → 视频帧
+        4. 视频帧 + 音频帧 → WebRTC推流（同步）
+        
+        Args:
+            text: 用户输入文本（已经是LLM响应）
+            avatar_id: Avatar ID
+            session_id: 会话 ID（用于 WebRTC 连接）
+            fps: 视频帧率
+            
+        Returns:
+            int: 推送的帧数
+        """
+        import os
+        
+        logger.info(f"[Realtime Streaming] Starting for avatar: {avatar_id}")
+        
+        # 1. 获取或创建流式引擎
+        avatar_path = os.path.join(settings.avatars_dir, avatar_id)
+        if not os.path.exists(avatar_path):
+            logger.error(f"Avatar not found: {avatar_path}")
+            return 0
+            
+        engine = get_streaming_engine(
+            avatar_id=avatar_id,
+            avatar_path=avatar_path,
+            batch_size=8,
+            fps=50,  # 音频帧率 50fps = 20ms/chunk
+            voice=settings.tts_voice,
+            tts_rate=settings.tts_rate,
+            tts_pitch=settings.tts_pitch
+        )
+        
+        # 2. 获取 WebRTC streamer
+        from webrtc_streamer import get_webrtc_streamer
+        streamer = get_webrtc_streamer()
+        
+        # 3. 实时处理文本，生成同步的音视频帧
+        frame_count = 0
+        audio_started = False
+        
+        async for video_frame, audio_samples in engine.process_text(text):
+            # 推送视频帧
+            await streamer.stream_frame(session_id, video_frame)
+            
+            # 推送音频（将float32转为int16）
+            audio_int16 = (audio_samples * 32767).astype('int16')
+            # TODO: 需要在 WebRTCStreamer 中添加 stream_audio_samples 方法
+            # await streamer.stream_audio_samples(session_id, audio_int16)
+            
+            frame_count += 1
+            
+            if frame_count == 1:
+                logger.info(f"⚡ First frame pushed to WebRTC for session {session_id}")
+                
+            if frame_count % 25 == 0:
+                logger.info(f"Streamed {frame_count} frames to session {session_id}")
+                
+        logger.info(f"[Realtime Streaming] Completed: {frame_count} frames")
+        return frame_count
+
+    async def stream_text_and_video_realtime(
+        self,
+        text: str,
+        avatar_id: str,
+        session_id: str,
+        tutor_id: int = None,
+        kb_id: Optional[str] = None,
+        fps: int = 25
+    ):
+        """
+        完整的实时流式处理 - LLM + TTS + Lip-Sync
+        
+        处理流程:
+        1. LLM 流式生成文本
+        2. 每收集完整句子就发送到 TTS
+        3. TTS 边生成边推送到 MuseTalk
+        4. 视频帧实时推送到 WebRTC
+        
+        Args:
+            text: 用户输入文本（问题）
+            avatar_id: Avatar ID
+            session_id: 会话 ID
+            tutor_id: 导师 ID
+            kb_id: 知识库 ID
+            fps: 视频帧率
+            
+        Returns:
+            str: 完整的 LLM 响应文本
+        """
+        import os
+        import re
+        
+        logger.info(f"[Full Realtime Streaming] Starting for avatar: {avatar_id}")
+        
+        # 1. 获取或创建流式引擎
+        avatar_path = os.path.join(settings.avatars_dir, avatar_id)
+        if not os.path.exists(avatar_path):
+            logger.error(f"Avatar not found: {avatar_path}")
+            return ""
+            
+        engine = get_streaming_engine(
+            avatar_id=avatar_id,
+            avatar_path=avatar_path,
+            batch_size=8,
+            fps=50,
+            voice=settings.tts_voice,
+            tts_rate=settings.tts_rate,
+            tts_pitch=settings.tts_pitch
+        )
+        
+        # 2. 流式生成 LLM 响应
+        full_response = ""
+        sentence_buffer = ""
+        sentence_endings = re.compile(r'[。！？.!?]')
+        
+        async for token in self.stream_text_response(
+            text=text,
+            tutor_id=tutor_id or self.tutor_id,
+            kb_id=kb_id
+        ):
+            full_response += token
+            sentence_buffer += token
+            
+            # 检查是否有完整句子
+            if sentence_endings.search(sentence_buffer):
+                # 找到句子结束符，发送到TTS
+                sentences = sentence_endings.split(sentence_buffer)
+                for i, sentence in enumerate(sentences[:-1]):
+                    if sentence.strip():
+                        engine.tts.put_text(sentence.strip() + sentences[i+1] if i+1 < len(sentences) else sentence.strip())
+                        logger.info(f"[Realtime] Sent sentence to TTS: {sentence[:30]}...")
+                sentence_buffer = sentences[-1] if sentences[-1] else ""
+                
+        # 发送剩余的文本
+        if sentence_buffer.strip():
+            engine.tts.put_text(sentence_buffer.strip())
+            logger.info(f"[Realtime] Sent final text to TTS: {sentence_buffer[:30]}...")
+            
+        logger.info(f"[Full Realtime Streaming] LLM complete: {len(full_response)} chars")
+        
+        # 3. 等待并推送所有视频帧
+        from webrtc_streamer import get_webrtc_streamer
+        streamer = get_webrtc_streamer()
+        
+        frame_count = 0
+        # 持续读取视频帧直到引擎完成
+        while True:
+            try:
+                video_frame = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: engine.video_frame_queue.get(timeout=3)
+                    ),
+                    timeout=5
+                )
+                
+                await streamer.stream_frame(session_id, video_frame)
+                frame_count += 1
+                
+                if frame_count == 1:
+                    logger.info(f"⚡ First frame pushed!")
+                    
+                if frame_count % 25 == 0:
+                    logger.info(f"Streamed {frame_count} frames")
+                    
+            except (asyncio.TimeoutError, Exception):
+                if engine.video_frame_queue.empty():
+                    break
+                    
+        logger.info(f"[Full Realtime Streaming] Complete: {frame_count} frames, {len(full_response)} chars")
+        return full_response
 
 
 # 按 tutor_id 隔离的 AI 引擎实例缓存
